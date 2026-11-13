@@ -16,7 +16,7 @@ The unit talks at **460800 baud, 8N1** (it can be configured for 115200 instead;
 
 ## Install
 
-The project uses [uv](https://docs.astral.sh/uv/). As a tool, with the `rs7` command and the GUI:
+Python 3.11 or newer is needed. The project uses [uv](https://docs.astral.sh/uv/). As a tool, with the `rs7` command and the GUI:
 
     uv tool install "gammascientific-rs7[gui] @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"
 

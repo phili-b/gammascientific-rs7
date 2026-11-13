@@ -5,9 +5,12 @@ Python API, command line tool and desktop GUI for the Gamma Scientific **Spectra
 - `rs7` (Python): a small API over the RS-7's ASCII command set (user manual, section 4)
 - `rs7` (command): control the unit from a terminal (`rs7 set`, `rs7 match`, `rs7 spectrum`, ...)
 - `rs7-gui`: a desktop window (PySide6) laid out like the manufacturer's SpectralLED Assistant
-- **spectral matching**: make the RS-7 reproduce a CIE illuminant (D65, A, FL2, LED-B3, ...), a CIE daylight or black body at any temperature, or a spectrum from a CSV file, at an absolute level in lux or cd/m2
+- **spectral matching**: make the RS-7 reproduce a CIE illuminant (D65, A, FL2, LED-B3, ...), a CIE daylight or black body at any temperature, or a spectrum from a CSV file, at an absolute level in lux or cd/m2. By default the channel powers are solved on the PC from the measured spectrum of each channel (bounded least squares with feedback from the real output); the RS-7's own fit is available with `--method firmware`
 - **color quality**: CCT, Duv, xy, u'v', CRI (Ra, R1-R14) and TM-30 (Rf, Rg) of the output and of the target, and the difference between them, computed on the PC with [colour-science](https://www.colour-science.org/)
-- runs on Linux (including the Raspberry Pi) and Windows; the CLI and API need `pyserial`, `typer`, `rich` and `colour-science` (numpy)
+- **monochromatic steps and scans**: one narrow channel at a chosen photon flux, radiant power or drive level, or a scan through all narrow channels at equal photon flux (spectral response and QE measurements)
+- **characterization**: output, color and wavelength shift against drive level (dimming), and a log of output, color and temperature over time (warm-up, drift)
+- **snapshots**: save the channel powers and spectrum to a JSON file and restore them later; the GUI can also draw saved spectra or CSV files as references, and export the spectrum as CSV or the plot as PNG
+- runs on Linux (including the Raspberry Pi) and Windows with Python 3.11 or newer; the CLI and API need `pyserial`, `typer`, `rich`, `scipy` and `colour-science` (numpy)
 
 ![GUI](docs/img/gui.png)
 
@@ -57,6 +60,24 @@ with RS7() as rs7:
     print(out.cct, out.duv, out.cri_ra, out.tm30_rf, result.comparison.delta_uv_prime)
 ```
 
+`match` solves the channel powers on the PC (`method="local"`, the default; the first call on a unit measures every channel, about 10 s, and caches the result in `~/.rs7`). Use `method="firmware"` for the RS-7's own fit.
+
+Step through the narrow channels at equal photon flux, and save and restore the state ([docs/tools.md](docs/tools.md)):
+
+```python
+from rs7 import RS7
+from rs7.mono import mono_scan
+from rs7.snapshot import Snapshot, restore, take
+
+with RS7() as rs7:
+    for step in mono_scan(rs7, 400, 1000, photons=1e13):  # photons/s/cm2 (or /sr); the unit is restored afterwards
+        print(step.centroid_nm, step.power, step.photon_flux)  # take your measurement here
+
+    take(rs7, note="before").save("state.json")
+    # ... change the unit ...
+    restore(rs7, Snapshot.load("state.json"))
+```
+
 ## Command line
 
 ```
@@ -67,26 +88,35 @@ rs7 set 5=10 --only          # channel 5 to 10 %, all other channels off
 rs7 preset load 0            # load preset 0
 rs7 output 100 --keep-color  # 100 lux, keeping the chromaticity
 rs7 illuminants              # the target spectra that match accepts, with CCT, Duv, xy, CRI
-rs7 match D65 --level 500    # reproduce D65 at 500 lux (cd/m2) and report the match
+rs7 match D65 --level 500    # reproduce D65 at 500 lux (cd/m2) and report the match (local fit)
+rs7 match D65 -l 500 -m firmware  # the same with the RS-7's own fit
 rs7 match 3000K --max        # imitate a 3000 K black body at the highest output
 rs7 measure --target D65     # color quality of the present output, compared with D65 (changes nothing)
 rs7 spectrum --csv out.csv   # write the output spectrum to a file
+rs7 basis                    # the per-channel spectra of the local fit (measured once, then cached)
+rs7 mono 550 --photons 1e13  # only the narrow channel nearest 550 nm, at 1e13 photons/s/cm2
+rs7 scan --start 400 --end 700 --photons 1e13 --csv scan.csv  # every narrow channel in turn, equal flux
+rs7 dimming --channel 4      # how channel 4 changes (power, wavelength, width) with drive level
+rs7 monitor --interval 10 --duration 600 --csv log.csv       # output, color, temperature over time
+rs7 save state.json          # save the channel powers and spectrum
+rs7 restore state.json       # put the unit back
 rs7 off
 ```
 
-Without `--port` / `-p` (or the `RS7_PORT` environment variable) the first RS-7 found is used. `rs7 --help` lists all commands; they are described in [docs/cli.md](docs/cli.md); the spectral matching and the color metrics are explained in [docs/colorimetry.md](docs/colorimetry.md). `rs7 bridge` shares the unit over TCP so another machine can use it.
+Without `--port` / `-p` (or the `RS7_PORT` environment variable) the first RS-7 found is used. `rs7 --help` lists all commands; they are described in [docs/cli.md](docs/cli.md); the spectral matching and the color metrics are explained in [docs/colorimetry.md](docs/colorimetry.md), and the monochromatic scans, dimming, monitoring and snapshots in [docs/tools.md](docs/tools.md). `rs7 bridge` shares the unit over TCP so another machine can use it.
 
 ## GUI
 
     rs7-gui
 
-or `rs7 gui` or `python -m rs7.gui`. Pick a port under **Settings > Select COM Port**; it is remembered, and if none is stored the first RS-7 found is used. All unit communication runs on a background thread, so the window does not freeze. A **Color quality** panel shows CCT, Duv, CRI and TM-30 of the output; **View > Target Spectrum** matches a target spectrum. See [docs/gui.md](docs/gui.md).
+or `rs7 gui` or `python -m rs7.gui`. Pick a port under **Settings > Select COM Port**; it is remembered, and if none is stored the first RS-7 found is used. All unit communication runs on a background thread, so the window does not freeze. A **Color quality** panel shows CCT, Duv, CRI and TM-30 of the output; **View > Target Spectrum** matches a target spectrum (**Fit with** the local optimizer or the RS-7 firmware); the **File** menu saves and restores snapshots, saves the spectrum as CSV, exports the plot as PNG and adds reference spectra to the plot. See [docs/gui.md](docs/gui.md).
 
 ## Documentation
 
 - [Getting started](docs/index.md)
 - [Command line](docs/cli.md)
 - [Spectral matching and color quality](docs/colorimetry.md)
+- [Spectral tools](docs/tools.md): monochromatic scans, dimming, monitoring, snapshots
 - [API reference](docs/api.md)
 - [GUI](docs/gui.md)
 - [Serial protocol notes](docs/protocol.md)

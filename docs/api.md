@@ -1,8 +1,10 @@
 # API reference
 
 Everything to control the unit is in `rs7.RS7`; the spectral matching and color quality functions are in
-`rs7.illuminants`, `rs7.colorimetry` and `rs7.match` (see below). Each method sends one or a few RS-7 commands; the command is named so
-you can look it up in the user manual (section 4).
+`rs7.illuminants`, `rs7.colorimetry` and `rs7.match`; the local fit, monochromatic steps, characterization and
+snapshots are in `rs7.optimize`, `rs7.mono`, `rs7.characterize` and `rs7.snapshot` (see below). Each `RS7`
+method sends one or a few RS-7 commands; the command is named so you can look it up in the user manual
+(section 4). The package needs Python 3.11 or newer.
 
 ## Connection and raw commands
 
@@ -33,6 +35,7 @@ rs7 = RS7(find_ports()[0])  # same as RS7()
 | Method | Command | Description |
 |---|---|---|
 | `channel_info()` | `LIN` | `ChannelInfo` (wavelength, FWHM) of each fitted channel |
+| `channel_groups()` | `GRP`, `CGL` | `{leader: [members]}`: fitted channels that are set together. With grouping on, setting any member sets the whole group; a channel that is in no group maps to itself, e.g. `{3: [3, 5, 30], 4: [4], ...}`. The key is the first channel of the group |
 | `channel_power(ch)` | `SCP ch` | Power of one channel |
 | `channel_powers()` | `SCP 0` | `{channel: power}` of channels that are on |
 | `set_channel_power(ch, p)` | `SCP ch,p` | Set one channel; returns when settled |
@@ -66,8 +69,25 @@ rs7 = RS7(find_ports()[0])  # same as RS7()
 To match a named illuminant at an absolute level in one call, use `rs7.match.match` (below) instead of these
 steps.
 
-Helpers in `rs7.spectrum` (no hardware): `blackbody(cct, start, end)`, `load_csv(path)`,
-`resample(points, start, end)`, `cct_to_xy(cct)`, `wavelength_to_rgb(nm)`.
+Helpers in `rs7.spectrum` (no hardware):
+
+| Function | Description |
+|---|---|
+| `blackbody(cct, start, end)` | Planck spectrum at 1 nm steps, peak 1 |
+| `load_csv(path)` | `[(nm, value), ...]` from `wavelength, value` lines |
+| `resample(points, start, end)` | Interpolate to 1 nm steps |
+| `cct_to_xy(cct)` | CIE 1931 x, y of the Planckian locus |
+| `wavelength_to_rgb(nm)` | Approximate display color of a wavelength |
+| `centroid(spectrum)` | Power-weighted mean wavelength (nm) of `[(nm, value), ...]`; `None` if there is no power |
+| `fwhm(spectrum)` | Full width at half maximum (nm), from the outermost half-power crossings, linearly interpolated; `None` if empty or no peak |
+| `photon_flux(spectrum)` | Photons/s/cm2 (or /sr) of a spectrum in uW/cm2/nm (or /sr) at 1 nm steps: the sum of `S x 1e-6 W x lambda x 1e-9 m / (h c)`. See [Photon units](tools.md#photon-units) |
+
+```python
+from rs7.spectrum import centroid, fwhm, photon_flux
+
+s = rs7.spectrum(5, 360, 1100)  # one channel
+print(centroid(s), fwhm(s), photon_flux(s))
+```
 
 ## Target spectra: `rs7.illuminants`
 
@@ -109,13 +129,13 @@ print(analyze(d65).cct)  # about 6504 K
 
 | Function | Description |
 |---|---|
-| `match(rs7, target, level=None, units=Units.PHOTOMETRIC, at_max=False, start=380, end=780, include_white=False, correct_chromaticity=True)` | Scale the target to `level`, fit the unit to it (`TSP`, `FTS`), correct the color (`CCS`) and set the exact level (`OUT` / `OUTC`). `level=None` keeps the present level; `at_max=True` fits at the highest output the soft limit allows. Returns a `MatchResult` |
+| `match(rs7, target, level=None, units=Units.PHOTOMETRIC, at_max=False, start=380, end=780, include_white=False, correct_chromaticity=True, method="local")` | Scale the target to `level`, fit the unit to it, set the exact level and correct the color (`CCS`). `method="local"` (default) solves the channel powers on the PC (`rs7.optimize`); `method="firmware"` uses the RS-7's own fit (`TSP`, `FTS`). `level=None` keeps the present level; `at_max=True` fits at the highest output the soft limit allows. `include_white` applies to the firmware fit only. Returns a `MatchResult`; raises `ValueError` for another `method` |
 | `measure(rs7)` | Read-only: the `ColorReport` of the present output |
 | `measure_against(rs7, target, start=380, end=780)` | Read-only: a `MatchResult` comparing the present output with `target` at the same level (its `unit_rms_error` is NaN) |
 | `scale_to_level(relative, start, level, units)` | Factor that turns a relative spectrum into absolute units with the given total level (photometric or radiometric) |
 
 `MatchResult` has `target_name`, `target` and `output` (`ColorReport`), `comparison` (`Comparison`),
-`unit_rms_error` (the RS-7's own spectral error, `RPE`, in %), and `target_spectrum` and `output_spectrum`
+`unit_rms_error` (the RS-7's own spectral error, `RPE`, in %; NaN for the local fit), and `target_spectrum` and `output_spectrum`
 (`[(nm, value), ...]`, absolute; the target is scaled to the level the output reached).
 
 ```python
@@ -123,8 +143,90 @@ from rs7 import RS7
 from rs7.match import match
 
 with RS7() as rs7:
-    result = match(rs7, "D65", level=500)  # 500 lux (or cd/m2)
-    print(result.output.cct, result.comparison.delta_uv_prime, result.unit_rms_error)
+    result = match(rs7, "D65", level=500)  # 500 lux (or cd/m2), local fit
+    print(result.output.cct, result.comparison.delta_uv_prime, result.comparison.spectral_rms)
+```
+
+The two methods are compared in [Local fit vs firmware fit](colorimetry.md#local-fit-vs-firmware-fit).
+
+## Local fit: `rs7.optimize`
+
+The fit that `match(method="local")` uses; it can also be called directly. It needs SciPy.
+
+| Function / class | Description |
+|---|---|
+| `ChannelBasis` | The spectrum per 1 % of power of every channel group, 1 nm steps over `start`-`end` (360-1100 nm). Fields `board`, `start`, `end`, `power` (the % it was measured at), `groups` (leader to members) and `spectra` (leader to a list). `save(path)` and `ChannelBasis.load(path)` read and write JSON |
+| `measure_basis(rs7, power=70.0, progress=None)` | Measure every group at `power` % (each is switched on briefly and put back; about 10 s). `progress(done, total)` is called after each group |
+| `load_basis(rs7, remeasure=False, progress=None)` | The basis cached in `~/.rs7/basis-<board>.json`; measured and cached first if there is none, if `remeasure` is true, or if the board, calibration or range differ |
+| `solve(basis, target, start, max_power=100.0, color_weight=50.0, fit_range=None)` | Channel powers `{leader: %}` whose summed spectra are closest to `target` (absolute, uW/cm2/nm or /sr, 1 nm from `start`). Bounded least squares over `fit_range` (default: the target's range), plus three XYZ rows and rows with target 0 outside the fit range. No hardware |
+| `apply(rs7, basis, powers)` | Set every group to its power (internal %); groups not in `powers` go off |
+| `fit(rs7, target, start, at_max=False, iterations=2, basis=None)` | Solve, set, read the real spectrum, add the remaining error to the target and solve again (`iterations` times). Powers are limited to 95 % of the soft limit. With `at_max` the target is first scaled up until a channel reaches the limit. Returns the powers that were set. It does not set the level or the color; `match()` does that afterwards |
+
+Constants: `COLOR_WEIGHT` (50), `LEAK_WEIGHT` (0.5), `MIN_INSIDE` (0.05: channels with less of their power inside
+the fit range are not used), `BASIS_RANGE` (360, 1100). The method is explained in
+[Local fit vs firmware fit](colorimetry.md#local-fit-vs-firmware-fit).
+
+```python
+from rs7 import RS7, Units
+from rs7.illuminants import target_spectrum
+from rs7.match import scale_to_level
+from rs7.optimize import fit, load_basis
+
+relative = target_spectrum("D65", 380, 780)
+scale = scale_to_level(relative, 380, 500, Units.PHOTOMETRIC)  # 500 lux or cd/m2
+target = [v * scale for v in relative]  # absolute, uW/cm2/nm
+
+with RS7() as rs7:
+    basis = load_basis(rs7)  # measured the first time, then cached
+    print(fit(rs7, target, 380, basis=basis))  # {group leader: power %}
+```
+
+## Monochromatic steps: `rs7.mono`
+
+One narrow channel (group) at a time, at a chosen photon flux, radiant power or drive level; see
+[Spectral tools](tools.md#monochromatic-steps).
+
+| Function / class | Description |
+|---|---|
+| `mono_channels(rs7, start=360, end=1100, max_fwhm=60.0)` | `[(leader, members, nominal_nm, nominal_fwhm), ...]` for the narrow channels with a nominal wavelength in the range, sorted by wavelength; white channels (FWHM above `max_fwhm`) are left out |
+| `set_mono(rs7, channel, photons=None, radiometric=None, power=None)` | Switch everything off except the group of `channel` and set it to exactly one of `photons` (photons/s/cm2 or /sr), `radiometric` (uW/cm2 or /sr) or `power` (%, internal units). For a flux the drive level is iterated, up to 4 tries, until it is within 0.2 %. Returns a `MonoStep`. Raises `ValueError` for no or several goals, or a channel that is not fitted |
+| `mono_scan(rs7, start=360, end=1100, photons=None, radiometric=None, power=None, max_fwhm=60.0)` | Generator of `MonoStep`, one per narrow channel by nominal wavelength. The unit's channel powers are restored when the generator ends, also on an error or when the loop is left early |
+| `MonoStep` | `channel` (group leader), `members`, `nominal_nm`, `centroid_nm`, `peak_nm`, `fwhm_nm`, `power` (%), `radiometric`, `photon_flux`, `at_limit` (the goal needed more than the soft limit allows) |
+
+```python
+from rs7 import RS7
+from rs7.mono import mono_scan
+
+with RS7() as rs7:
+    for step in mono_scan(rs7, 400, 1000, photons=1e13):
+        print(step.centroid_nm, step.power, step.photon_flux)
+```
+
+## Characterization: `rs7.characterize`
+
+How the unit dims and how stable it is; see [Spectral tools](tools.md#dimming).
+
+| Function | Description |
+|---|---|
+| `dimming(rs7, levels=None, channel=None)` | Generator of one dict per level (%, internal units; default `DEFAULT_LEVELS`, 1 to 100). Without `channel` the present spectrum is scaled and the rows have `level`, `actual` (`OUTA`), `photometric`, `x`, `y`, `cct`, `centroid_nm`. With `channel` only that channel is on and the rows have `level`, `radiometric`, `photon_flux`, `centroid_nm`, `peak_nm`, `fwhm_nm`. The channel powers are restored afterwards |
+| `monitor(rs7, interval=10.0, duration=600.0, units=Units.PHOTOMETRIC)` | Generator of one dict per reading: `time_s`, `output` (`OUT`), `actual` (`OUTA`), `x`, `y`, `cct`, `led_temp_c`, `monitor_temp_c`. `duration=0` runs until you stop iterating. Changes nothing on the unit |
+
+## Snapshots: `rs7.snapshot`
+
+| Function / class | Description |
+|---|---|
+| `take(rs7, note="")` | Read the present state into a `Snapshot`; changes nothing |
+| `restore(rs7, snapshot)` | Switch all channels off, set the snapshot's channel powers, units and wavelength range. Raises `RS7Error` for a snapshot from another LED board |
+| `Snapshot` | Dataclass with `time`, `board`, `units`, `wavelength_range`, `powers` (% internal units), `spectrum` (360-830 nm), `photometric`, `xy`, `cct` and `note`. `save(path)` writes JSON and `Snapshot.load(path)` reads it |
+
+```python
+from rs7 import RS7
+from rs7.snapshot import Snapshot, restore, take
+
+with RS7() as rs7:
+    take(rs7, "before").save("state.json")
+    # ... experiment ...
+    restore(rs7, Snapshot.load("state.json"))
 ```
 
 ## Presets
@@ -174,4 +276,8 @@ authentication.
 ::: rs7.illuminants
 ::: rs7.colorimetry
 ::: rs7.match
+::: rs7.optimize
+::: rs7.mono
+::: rs7.characterize
+::: rs7.snapshot
 ::: rs7.bridge

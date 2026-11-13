@@ -10,11 +10,12 @@ firmware, so the same metrics are available for the output and for the target an
 | `rs7.illuminants` | Target spectra by name: CIE illuminants, D-series daylight, black bodies, CSV files. |
 | `rs7.colorimetry` | `analyze()` computes a `ColorReport` from a spectrum; `compare()` compares an output with a target. |
 | `rs7.match` | `match()` fits the RS-7 to a target and returns a `MatchResult`; `measure()` reports the present output and `measure_against()` compares it with a target. |
+| `rs7.optimize` | The local fit: solves the channel powers on the PC (the default method of `match()`). |
 
 The CLI commands are `rs7 illuminants`, `rs7 match` and `rs7 measure` ([Command line](cli.md)). The GUI has the
 same functions under **View > Target Spectrum** and in the **Color quality** panel ([GUI](gui.md)). The CIE
 tables and the metrics come from [colour-science](https://www.colour-science.org/), a core dependency of the
-package (it needs numpy).
+package (it needs numpy); the local fit also needs [SciPy](https://scipy.org/).
 
 ## Targets
 
@@ -128,26 +129,47 @@ spectral RMS = 100 x sqrt( mean( (o_i - t_i)^2 ) ) / mean( t_i )         o, t: a
 0 is a perfect match. The RS-7's own error figure (`RPE`, `RS7.rms_error()`, `unit_rms_error` in
 `MatchResult`) is the firmware's own, similar spectral RMS error between its output and the target you loaded.
 It is not computed the same way as `spectral_rms`, so the two numbers are close but not identical; compare
-numbers from the same source. `rs7 measure` has no RPE because it loads no target in the unit.
+numbers from the same source. The RPE exists only for the firmware fit; `rs7 measure` and the local fit load
+no target in the unit, so `unit_rms_error` is NaN there and `spectral_rms` is the number to use.
 
 ### Other values
 
 `peak_nm` is the wavelength of the maximum and `centroid_nm` the power-weighted mean wavelength of the
-spectrum. `compare()` returns `delta_uv_prime`, `delta_cct`, `delta_duv`, `level_ratio` (output over target
+spectrum. For a single channel or another narrow spectrum, `rs7.spectrum.centroid()` and `fwhm()` give the
+centroid and the full width at half maximum, and `photon_flux()` the photon flux
+([Spectral tools](tools.md#photon-units)). `compare()` returns `delta_uv_prime`, `delta_cct`, `delta_duv`, `level_ratio` (output over target
 photometric level) and `spectral_rms`. `photometric_per_unit(relative, start)` gives the photometric value
 of a relative spectrum taken as 1 uW/cm2/nm per unit; `match()` uses it to scale a target to a level.
 
 ## How `match` works
 
-`rs7.match.match()` (and `rs7 match`) does this:
+`rs7.match.match()` (and `rs7 match`) has two methods: `method="local"` (the default) and `method="firmware"`
+(`--method` / `-m` on the command line). With `method="local"`:
 
 1. Build the relative target for the fit range (`start` to `end`, default 380-780 nm).
 2. Scale it to the requested level. A photometric level uses `photometric_per_unit`; a radiometric level uses
    the plain sum. With `level=None` the present output level is kept (the maximum is used if the unit is off).
-   With `at_max=True` no scaling is done and the firmware fits at the highest output the soft limit allows.
+   With `at_max=True` the target is first scaled to a moderate level and the fit then scales it up (step 3).
+3. `rs7.optimize.fit()` solves the channel powers on the PC and sets them (see
+   [Local fit vs firmware fit](#local-fit-vs-firmware-fit)). It uses the measured spectrum of every channel
+   group and corrects itself against the output the unit really gives.
+4. Unless `at_max` is set and a level is known, `OUT` sets the exact requested level. If the unit refuses
+   because a channel is at its limit, the level the fit reached is kept.
+5. `CCS`: color correction to the chromaticity of the target (skipped with `correct_chromaticity=False`). It
+   comes last because `OUTC` after `CCS` would undo the correction. At full output `CCS` can hit the soft limit:
+   the output is then stepped down to 97, 90 and 80 % until the correction fits; if it never does, the color stays
+   as the fit left it and the report shows the remaining error.
+6. The output spectrum is read for 360-830 nm and analyzed, the target is analyzed at the level that was actually
+   reached, and both are compared. The unit's wavelength range is set back to what it was.
+
+With `method="firmware"` the steps are:
+
+1. Build the relative target for the fit range (`start` to `end`, default 380-780 nm).
+2. Scale it to the requested level, as above. With `at_max=True` no scaling is done and the firmware fits at the
+   highest output the soft limit allows.
 3. Load it into the unit: `WLR` (range), `TSP` (target spectrum).
 4. `FTS`: the firmware's least-squares fit of the channel powers to the target. `include_white` adds the white
-   channels.
+   channels (it applies to the firmware fit only; the local fit uses every channel).
 5. `CCS`: color correction, which moves the output to the chromaticity of the target (skipped with
    `correct_chromaticity=False`).
 6. Unless `at_max` is set and a level is known, `OUTC` sets the exact requested level (`OUT` if the color
@@ -161,12 +183,13 @@ range is set back after reading the spectrum).
 
 ### Why `correct_chromaticity` is on by default
 
-The least-squares fit weights every wavelength equally. The eye does not: the color is dominated by where the
+A least-squares fit weights every wavelength equally. The eye does not: the color is dominated by where the
 error sits relative to the color matching functions. A fit with a low spectral RMS can therefore still be off in
 color. The color correction step adjusts the channel powers until the chromaticity equals the target's, which
 moves the spectrum slightly away from the least-squares optimum. It trades a (usually small) increase of the
-spectral error for an exact color. With `--no-correct` the fit is the firmware's least-squares result and the color can be off
-by a few thousandths in u'v' (see the LED-B3 example below). For a metameric match, where color is what counts,
+spectral error for an exact color. With `--no-correct --method firmware` the fit is the firmware's least-squares
+result and the color can be off by a few thousandths in u'v' (see the LED-B3 example below). The local fit already
+holds the color in its solution (the XYZ rows), so the correction there only removes a small remainder. For a metameric match, where color is what counts,
 keep it on; for a study of the spectral shape, turn it off.
 
 ### Limits
@@ -182,6 +205,75 @@ keep it on; for a study of the spectral shape, turn it off.
 - The reported values are those of the spectrum the unit reads back (`OSP`), so they are only as accurate as
   the unit's calibration of that spectrum.
 - Chromaticities far from the Planckian locus have no meaningful CCT, and CRI is not defined for them.
+
+## Local fit vs firmware fit
+
+The RS-7's own fit (`FTS`) is a least-squares fit inside the unit. The local method does the fit on the PC, with
+the measured spectrum of each channel, and uses the unit's spectrum readout to correct itself. It is the default
+of `match()`, `rs7 match` and the GUI. On the unit tested it gave a closer spectral shape and color than the
+firmware fit.
+
+### Method
+
+1. **Basis.** Each channel group's spectrum is measured once, at 70 % drive, over 360-1100 nm. Each group is
+   switched on briefly and put back; this takes about 10 s for the 35 groups of the unit tested. The spectra are
+   stored per 1 % of power in `~/.rs7/basis-<board>.json` (`ChannelBasis`) and used from then on. They are measured
+   again when the LED board or the calibration is different or the range changes, or on request with
+   `rs7 basis --remeasure`. `load_basis()` and `measure_basis()` do this in Python.
+2. **Bounded least squares.** `solve()` finds the channel powers (0 to the limit) whose summed spectra are closest
+   to the target, with `scipy.optimize.lsq_linear`. The rows are:
+    - the spectrum over the fit range;
+    - three rows for CIE X, Y and Z, weighted by `COLOR_WEIGHT` (50), so color and level are matched and not
+      only the shape;
+    - rows for the wavelengths outside the fit range, with target 0 and weight `LEAK_WEIGHT` (0.5), to avoid light
+      there. Silicon sensors see near infrared, so light outside the fit range can matter.
+
+   Channels with less than 5 % of their power inside the fit range are not used. The powers are limited to 95 % of
+   the soft limit, which leaves headroom to trim the level at the end.
+3. **Error feedback.** The fit sets the powers and reads the real output spectrum. The basis is only a model: LEDs
+   shift in wavelength with drive current, and the basis was measured at one power. The remaining error (target
+   minus measured) is added to the target and the problem is solved again, 2 times.
+4. **Level, then color.** `OUT` sets the level and `CCS x,y` corrects the color last, because `OUTC` after `CCS`
+   would undo the correction.
+
+At maximum output (`at_max`) the local fit scales the target until one channel reaches the limit and keeps the
+spectral shape. The firmware lets channels saturate: it gets brighter, but the spectrum is less faithful.
+
+### Measured comparison
+
+One unit (firmware 1.09, radiant calibration, levels in cd/m2). Spectral RMS is over 380-780 nm; "Outside" is the
+share of the radiant power outside 380-780 nm, measured over 360-1100 nm.
+
+| Target | Method | Level | Δu'v' | Spectral RMS | Ra | R9 | TM-30 Rf | Outside |
+|---|---|---|---|---|---|---|---|---|
+| D65 500 cd/m2 | firmware | 500.0 | 0.0003 | 18.7 % | 96.9 | 84.5 | 97.0 | 0.5 % |
+| D65 500 cd/m2 | local | 499.7 | 0.0001 | 17.0 % | 97.2 | 90.9 | 97.5 | 1.1 % |
+| A 300 cd/m2 | firmware | 300.0 | 0.0003 | 22.8 % | 95.1 | 79.2 | 96.1 | 0.8 % |
+| A 300 cd/m2 | local | 300.0 | 0.0000 | 19.5 % | 98.1 | 96.1 | 98.3 | 2.2 % |
+| LED-B3 300 cd/m2 | firmware | 300.0 | 0.0003 | 12.9 % | 84.2 | 17.7 | 84.4 | 0.2 % |
+| LED-B3 300 cd/m2 | local | 299.8 | 0.0002 | 7.0 % | 85.4 | 22.0 | 85.9 | 0.4 % |
+| D50 max | firmware | 41119 | 0.0017 | 12.2 % | 97.5 | 89.4 | 98.8 | 0.9 % |
+| D50 max | local | 20432 | 0.0000 | 11.5 % | 99.1 | 98.3 | 98.9 | 1.1 % |
+
+A match takes about 5 s with either method once the basis is cached.
+
+### Trade-offs
+
+- The local fit holds the spectral shape and the color better: a lower spectral RMS in all four cases, a Δu'v' of
+  0.0002 or less, and a higher Ra and R9 (R9 96.1 against 79.2 for illuminant A).
+- It puts slightly more light outside the fit range: 2.2 % against 0.8 % for illuminant A. The rows with target 0
+  limit this but do not remove it. If your sensor sees near infrared, look at this number; use
+  `method="firmware"` if it matters.
+- At maximum output the firmware is brighter (41119 against 20432 for D50) because it lets channels saturate. The
+  local fit keeps the shape and reaches the exact color; it is the better choice when the spectrum matters more
+  than the last factor of 2 in level.
+- The local fit needs SciPy and the cached basis; the first match on a new unit or LED board takes about 10 s longer.
+
+```
+rs7 match D65 --level 500                     # local (default)
+rs7 match D65 --level 500 --method firmware   # the RS-7's own fit
+rs7 basis                                     # show the measured channel spectra
+```
 
 ## Validation
 
@@ -208,17 +300,18 @@ specification of the instrument.
 | x, y | 0.3549, 0.3894 | 0.3549, 0.3894 |
 | CCT | 4806 K | 4805.6 K |
 
-**D65 at 500 cd/m2** (`rs7 match D65 --level 500`): level 500 cd/m2, CCT 6491 K (the target gives 6502 K over
+**D65 at 500 cd/m2** with the firmware fit (`rs7 match D65 --level 500 --method firmware`): level 500 cd/m2, CCT 6491 K (the target gives 6502 K over
 380-780 nm), Duv +0.0030, delta u'v' 0.0003, CRI Ra 96.9, R9 84.5, TM-30 Rf 97.0, Rg 99.9, spectral RMS 18.7 %
 (RS-7 RPE 18.31 %).
 
-**Illuminant A at maximum output** (`rs7 match A --max`): 18470 cd/m2, CCT 2855 K, delta u'v' 0.0001, Ra 97.8,
+**Illuminant A at maximum output**, firmware fit (`rs7 match A --max --method firmware`): 18470 cd/m2, CCT 2855 K, delta u'v' 0.0001, Ra 97.8,
 Rf 98.2.
 
-**LED-B3 without color correction** (`rs7 match LED-B3 --level 300 --no-correct`): delta u'v' 0.0026, Ra 83.7
+**LED-B3 without color correction**, firmware fit (`rs7 match LED-B3 --level 300 --no-correct --method firmware`): delta u'v' 0.0026, Ra 83.7
 against 84.8 for the target. The runs above with the correction on have delta u'v' of 0.0001 to 0.0003.
+The same targets with the local fit are in [Local fit vs firmware fit](#measured-comparison).
 
-For D65 the color and the rendering indices are close to the target while the spectral RMS is 18.7 %: the
+For D65 the color and the rendering indices are close to the target while the spectral RMS is 17 to 19 %: the
 spectrum is not identical, which is the limit of a finite set of LED channels (see Limits).
 
 ## Example
@@ -228,9 +321,12 @@ from rs7 import RS7, Units
 from rs7.match import match, measure
 
 with RS7() as rs7:
-    result = match(rs7, "D65", level=500, units=Units.PHOTOMETRIC)
+    result = match(rs7, "D65", level=500, units=Units.PHOTOMETRIC)  # method="local" is the default
     print(result.output.cct, result.output.duv, result.comparison.delta_uv_prime)
-    print(result.output.cri_ra, result.output.tm30_rf, result.comparison.spectral_rms, result.unit_rms_error)
+    print(result.output.cri_ra, result.output.tm30_rf, result.comparison.spectral_rms)
+
+    fw = match(rs7, "D65", level=500, method="firmware")  # the RS-7's own fit
+    print(fw.comparison.spectral_rms, fw.unit_rms_error)  # unit_rms_error (RPE) is only set for this method
 
     report = measure(rs7)  # read-only
     print(report.xy, report.cri_r[9])

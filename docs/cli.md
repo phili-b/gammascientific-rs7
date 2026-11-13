@@ -120,16 +120,22 @@ rs7 illuminants
 
 Make the RS-7 reproduce a target spectrum at an absolute level, and report how well it did. `TARGET` is a name
 from `rs7 illuminants`, `D<CCT>`, `<T>K`, or a CSV file with `wavelength, value` lines (any step size,
-interpolated to 1 nm). The steps (target, scale to level, fit, color correction, set level) are described in
+interpolated to 1 nm). The steps (target, scale to level, fit, set level, color correction) are described in
 [How `match` works](colorimetry.md#how-match-works).
+
+By default the channel powers are solved on the PC (`--method local`), from the measured spectrum of each channel
+group; the first run on a unit measures them (about 10 s, see [basis](#basis)). `--method firmware` uses the
+RS-7's own fit (`FTS`) instead. Measurements of both are in
+[Local fit vs firmware fit](colorimetry.md#local-fit-vs-firmware-fit).
 
 | Option | Description |
 |---|---|
 | `--level`, `-l` | Total output to reach. Default: keep the present level (the maximum if the unit is off). |
 | `--units`, `-u` | Units of `--level`: `photometric` (default; lux or cd/m2) or `radiometric`. |
-| `--max` | As bright as the soft limit allows (`--level` is ignored). |
+| `--method`, `-m` | `local` (default): solve the channel powers on the PC. `firmware`: the RS-7's own fit. |
+| `--max` | As bright as the soft limit allows (`--level` is ignored). With `local` the target is scaled until a channel reaches the limit, keeping the spectral shape; the firmware is brighter but less faithful. |
 | `--start`, `--end` | Fit range in nm (default 380 to 780). |
-| `--white` | Also use the white channels in the fit. |
+| `--white` | Also use the white channels in the fit (`--method firmware` only). |
 | `--no-correct` | Do not correct the color after the fit (it is corrected by default). |
 | `--csv FILE` | Write `nm, target, output` lines to this file. |
 
@@ -140,13 +146,14 @@ rs7 match D5000 --level 200 --start 400 --end 700
 rs7 match 3000K --level 50 --units radiometric
 rs7 match LED-B3 --level 300 --no-correct
 rs7 match target.csv --csv result.csv
+rs7 match D65 --level 500 --method firmware
 ```
 
 The output is a table with a Target, an Output and a Difference column, then a line with the spectral RMS and
-the RS-7's own error (RPE). The rows are: level, radiometric power, CCT, Duv, x y, u' v', CRI Ra, CRI R9,
+the RS-7's own error (RPE; `--method firmware` only). The rows are: level, radiometric power, CCT, Duv, x y, u' v', CRI Ra, CRI R9,
 TM-30 Rf and Rg, and the centroid wavelength. The Δu'v' is green below 0.001, yellow below 0.005 and red above.
 
-Values of one run on a unit with a radiant calibration (levels in cd/m2), `rs7 match D65 --level 500`:
+Values of one run on a unit with a radiant calibration (levels in cd/m2), `rs7 match D65 --level 500 --method firmware`:
 
 | | Target (D65, 380-780 nm) | Output | Difference |
 |---|---|---|---|
@@ -162,7 +169,10 @@ Values of one run on a unit with a radiant calibration (levels in cd/m2), `rs7 m
 | TM-30 Rg | 100.0 | 99.9 | |
 | Centroid (nm) | 566.0 | 564.7 | |
 
-followed by `spectral RMS 18.7 % (RS-7 RPE 18.31 %)`. More measured examples are in [Validation](colorimetry.md#validation).
+followed by `spectral RMS 18.7 % (RS-7 RPE 18.31 %)`. With the default local fit the same target gives, on the
+same unit, 499.7 cd/m2, Δu'v' 0.0001, spectral RMS 17.0 %, Ra 97.2, R9 90.9 and Rf 97.5. More measured examples
+are in [Local fit vs firmware fit](colorimetry.md#local-fit-vs-firmware-fit) and
+[Validation](colorimetry.md#validation).
 
 ### measure
 
@@ -206,6 +216,99 @@ rs7 preset list
 rs7 preset load 0
 rs7 preset store 3 "warm white"
 rs7 preset delete 3 -y
+```
+
+### basis
+
+Show the spectra the local fit uses, one row per channel group: the leading channel, the members of the group,
+the centroid wavelength and the peak value per 1 % of power. The spectra are measured once per LED board (each
+group is switched on briefly at 70 % and put back, 360-1100 nm, about 10 s) and cached in `~/.rs7/basis-<board>.json`.
+`match` does this by itself when there is no cache. `--remeasure` measures again, for example after the unit has
+been serviced or recalibrated; a different LED board or calibration, or a different range, triggers it too.
+
+```
+rs7 basis
+rs7 basis --remeasure
+```
+
+### mono
+
+Switch everything off except the narrow channel (FWHM of 60 nm or less; white channels are skipped) whose
+nominal wavelength is closest to `WAVELENGTH`, and set it to a photon flux, a radiant power or a drive level.
+Give one of `--photons` (photons/s/cm2, or per sr for a radiant calibration), `--radiometric` (uW/cm2, or
+uW/cm2/sr) or `--power` (drive level in %); the default is `--power 50`. For a flux the drive level is iterated
+(up to 4 tries) until the measured value is within 0.2 % of it; if that needs more than the soft limit allows, the
+step is marked `(limit)`. The table shows the channels, nominal and measured wavelength (centroid, peak), FWHM,
+drive level, radiant power and photon flux. The channel stays on afterwards.
+
+```
+rs7 mono 550 --photons 1e13
+rs7 mono 630 --radiometric 100
+rs7 mono 450 --power 20
+```
+
+See [Monochromatic steps](tools.md#monochromatic-steps).
+
+### scan
+
+Step through the narrow channels from `--start` to `--end` nm (default 360 to 1100), in order of nominal
+wavelength, each set as `mono` does, at the same `--photons`, `--radiometric` or `--power`. It stays `--dwell`
+seconds (default 1) on each step, so you can take a measurement, prints a line per step and a table at the end,
+and `--csv FILE` writes the steps. The original state of the unit is restored at the end, also on Ctrl+C.
+
+```
+rs7 scan --start 400 --end 700 --photons 1e13 --dwell 1 --csv scan.csv
+```
+
+See [Scans](tools.md#scans).
+
+### dimming
+
+Show how the unit changes with the drive level, then restore the earlier channel powers. `--levels` is a
+comma-separated list in % (default `1,2,5,10,20,50,100`). Without `--channel` the whole spectrum is scaled and each
+row has the level, the measured output (`OUTA`), luminance, x, y, CCT and centroid. With `--channel` / `-c N`
+only that channel is on and each row has its radiant power, photon flux, centroid, peak and FWHM, which shows the
+LED's wavelength shift with drive current. `--csv FILE` writes the rows.
+
+```
+rs7 dimming
+rs7 dimming --channel 4 --levels 10,50,100 --csv ch4.csv
+```
+
+See [Dimming](tools.md#dimming).
+
+### monitor
+
+Log the unit over time (warm-up, drift) and change nothing. Each row has the time, the output (`OUT`), the
+output measured by the monitor photodiode (`OUTA`), x, y, CCT and the two TEC temperatures. `--interval` seconds
+between readings (default 10), `--duration` total seconds (default 600; 0 runs until Ctrl+C). `--csv FILE` is
+rewritten after every reading, so it is current during a long run. The second temperature is only meaningful if the
+unit has the optional wavelength monitor.
+
+```
+rs7 monitor --interval 10 --duration 600 --csv log.csv
+rs7 monitor --duration 0 --csv overnight.csv
+```
+
+See [Monitoring and stability](tools.md#monitoring-and-stability).
+
+### save
+
+Save the channel powers and the spectrum they give to a JSON file, with an optional `--note`. Changes nothing on
+the unit.
+
+```
+rs7 save state.json
+rs7 save state.json --note "D65 500 cd/m2"
+```
+
+### restore
+
+Put the unit back to a state saved with `save`: units, channel powers and wavelength range. It refuses a snapshot
+from another LED board. See [Snapshots](tools.md#snapshots).
+
+```
+rs7 restore state.json
 ```
 
 ### alarm

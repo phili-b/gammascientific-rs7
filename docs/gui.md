@@ -6,6 +6,9 @@ The layout follows the manufacturer's SpectralLED Assistant (user manual, sectio
 
 ![GUI](img/gui.png)
 
+The screenshot shows a local-optimizer match of D65 at 500 cd/m2 (Δu'v' 0.0001, spectral RMS 17.0 %) on a unit with
+a radiant calibration; the blue line is the target and the white line the output.
+
 | Area | What it does |
 |---|---|
 | Output pane (1a) | Power level %, radiance/irradiance, luminance/illuminance, CCT, CIE x, y, centroid. Type a value and press Enter to set it. **Shift+Enter** on a power value keeps the chromaticity. |
@@ -19,6 +22,28 @@ The layout follows the manufacturer's SpectralLED Assistant (user manual, sectio
 | Status bar (1j) | Last command and reply; flashes red on an error. Shows "working..." while the unit is busy. |
 | Presets (1k) | Pick one in the combo box to load it; **Store Preset** saves the present output; **Delete** deletes the selected one. |
 | Alarm box (1m) | Polled every 2 s; red while an alarm is active; click to clear. |
+
+## File menu
+
+| Item | What it does |
+|---|---|
+| Save Snapshot... | Write the channel powers and the spectrum they give to a JSON file (the same as `rs7 save`). Changes nothing on the unit |
+| Restore Snapshot... | Put the unit back to a snapshot file (the same as `rs7 restore`). It refuses a snapshot from another LED board |
+| Save Spectrum as CSV... | Write the output spectrum on screen as `nm,value` lines |
+| Export Plot as PNG... | Save the spectral plot as it is shown (with the target, channels and references) |
+| Add Reference Spectrum... | Draw a spectrum from a CSV file or a snapshot JSON file on the plot, see below |
+| Clear Reference Spectra | Remove all reference spectra |
+
+See [Snapshots](tools.md#snapshots) for what a snapshot holds.
+
+### Reference spectra
+
+**Add Reference Spectrum** takes a CSV file (`wavelength, value` lines; any step size; lines that are not numbers
+are skipped) or a snapshot `.json` file (its stored 360-830 nm spectrum). The reference is drawn dashed on the
+spectral plot, on the same scale as the output, and named in a legend at the top right by its file name. Up to
+four colors are used in turn. Use it to compare the present output with a saved one, or with a measurement made
+elsewhere. References are not saved with the settings; **Clear Reference Spectra** removes them, and they are
+gone when the window closes. Only the part inside the plotted range is drawn.
 
 ## Settings menu
 
@@ -56,10 +81,12 @@ of the output, and as a blue cross on the CIE chart. The Color quality panel the
 | Level | The level to reach, with the units (photometric or radiometric). Empty keeps the present level. |
 | As bright as possible (soft limit) | Fit at the highest output the soft limit allows; the level is ignored. |
 | Fit range | Wavelengths used for the fit (default 380-780 nm). |
+| Fit with | **Local optimizer** (default): the channel powers are solved on the PC from the measured spectrum of each channel group. The first time on a unit all channels are measured, about 10 s (cached afterwards). **RS-7 firmware**: the unit's own fit (`FTS`). See [Local fit vs firmware fit](colorimetry.md#local-fit-vs-firmware-fit). |
 | Correct chromaticity after fit | After the fit, correct the color to the target's exactly (on by default). Costs a little spectral match; see [Why correct_chromaticity](colorimetry.md#why-correct_chromaticity-is-on-by-default). |
-| Match | Scale the target to the level, fit the channels, correct the color and set the level. The result line below shows the target, the level reached, Δu'v' and the RS-7's own spectral error (RPE). |
+| Match | Scale the target to the level, fit the channels, set the level and correct the color. The result line below shows the target, the level reached, Δu'v' and the spectral RMS. |
 
-**Settings > Include White Channels in Spectral Fit** applies to the fit. The steps of a match are described
+**Settings > Include White Channels in Spectral Fit** applies to the firmware fit only; the local optimizer uses
+every channel. The steps of a match are described
 under [How `match` works](colorimetry.md#how-match-works).
 
 The earlier controls (black body CCT, scale factor, Fit To Target, Fit At Max) are gone: type a temperature such
@@ -67,10 +94,10 @@ as `3000K` in the Target box, give the level in the Level box and press Match.
 
 ## Not (yet) in this GUI
 
-Offline mode with a calibration file, the ColorChecker library, export to CSV, accessory transfer functions
-and the iris. All of these can still be reached with `RS7.command()` (the CLI can export a spectrum:
-`rs7 spectrum --csv`, and a target and output pair: `rs7 match --csv`). The CIE illuminant library is available
-as targets.
+Offline mode with a calibration file, the ColorChecker library, accessory transfer functions and the iris.
+These can still be reached with `RS7.command()`. The CIE illuminant library is available as targets. The
+monochromatic steps, scans, dimming and monitoring are in the command line and the API only
+([Spectral tools](tools.md)).
 
 ## Threading
 
