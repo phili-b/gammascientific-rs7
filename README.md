@@ -2,6 +2,15 @@
 
 Python API, command line tool and desktop GUI for the Gamma Scientific **SpectralLED RS-7** tunable light source.
 
+![The rs7-gui desktop window after matching CIE D65 at 500 cd/m2](docs/img/gui.png)
+
+*`rs7-gui` after matching CIE D65 at 500 cd/m2 with the local fit: output spectrum (white) over the D65 target
+(blue), color quality (Δu'v' 0.0001, CRI 97, TM-30 Rf 97.5), CIE chart with the Planckian locus.*
+
+![Terminal output of rs7 measure --target D65](docs/img/cli-measure.svg)
+
+*`rs7 measure --target D65`: the present output compared with D65 at the same level (read-only).*
+
 - `rs7` (Python): a small API over the RS-7's ASCII command set (user manual, section 4)
 - `rs7` (command): control the unit from a terminal (`rs7 set`, `rs7 match`, `rs7 spectrum`, ...)
 - `rs7-gui`: a desktop window (PySide6) laid out like the manufacturer's SpectralLED Assistant
@@ -11,8 +20,6 @@ Python API, command line tool and desktop GUI for the Gamma Scientific **Spectra
 - **characterization**: output, color and wavelength shift against drive level (dimming), and a log of output, color and temperature over time (warm-up, drift)
 - **snapshots**: save the channel powers and spectrum to a JSON file and restore them later; the GUI can also draw saved spectra or CSV files as references, and export the spectrum as CSV or the plot as PNG
 - runs on Linux (including the Raspberry Pi) and Windows with Python 3.11 or newer; the CLI and API need `pyserial`, `typer`, `rich`, `scipy` and `colour-science` (numpy)
-
-![GUI](docs/img/gui.png)
 
 ## Install
 
