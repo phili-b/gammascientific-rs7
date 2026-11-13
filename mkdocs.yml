@@ -1,0 +1,14 @@
+site_name: gammascientific-rs7
+nav:
+  - Getting started: index.md
+  - API reference: api.md
+  - GUI: gui.md
+  - Serial protocol: protocol.md
+theme:
+  name: material
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
