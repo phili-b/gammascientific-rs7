@@ -25,7 +25,7 @@ console = Console()
 err = Console(stderr=True)
 
 
-class UnitName(str, enum.Enum):
+class UnitName(enum.StrEnum):
     radiometric = "radiometric"
     photometric = "photometric"
     internal = "internal"
@@ -33,6 +33,11 @@ class UnitName(str, enum.Enum):
     @property
     def units(self) -> Units:
         return Units[self.name.upper()]
+
+
+class Method(enum.StrEnum):
+    local = "local"
+    firmware = "firmware"
 
 
 class State:
@@ -240,13 +245,17 @@ def match(
     white: Annotated[bool, typer.Option("--white", help="Also use the white channels.")] = False,
     correct: Annotated[bool, typer.Option(help="Correct the color exactly after the spectral fit.")] = True,
     out: Annotated[Path | None, typer.Option("--csv", help="Write nm, target, output to this CSV file.")] = None,
+    method: Annotated[
+        Method,
+        typer.Option("--method", "-m", help="local: solve on the PC (better spectra); firmware: the RS-7's fit."),
+    ] = Method.local,
 ):
     """Make the RS-7 reproduce a target spectrum (e.g. D65 at 500 lux) and report the match."""
     from .match import match as do_match
 
     with connect() as r:
         try:
-            result = do_match(r, target, level, units.units, at_max, start, end, white, correct)
+            result = do_match(r, target, level, units.units, at_max, start, end, white, correct, method.value)
         except ValueError as e:
             raise typer.BadParameter(str(e)) from e
         labels = _unit_labels(r)
@@ -424,6 +433,212 @@ def send(
             lines = r.command(c, multiline=multiline)
             console.print(f"[dim]> {c}[/]")
             console.print("\n".join(lines) if lines else "Ok", markup=False)
+
+
+# ---- local fit basis, monochromatic steps ------------------------------------------------------------
+
+
+@app.command()
+def basis(remeasure: Annotated[bool, typer.Option("--remeasure", help="Measure again (about 10 s).")] = False):
+    """Show (or measure) the per-channel spectra the local fit uses; cached per LED board in ~/.rs7."""
+    from .optimize import load_basis
+    from .spectrum import centroid
+
+    with connect() as r:
+        b = load_basis(r, remeasure, progress=lambda i, n: err.print(f"measuring channel {i}/{n}", end="\r"))
+    table = Table(
+        "Group", "Channels", "Centroid (nm)", "Peak per 1 %", title=f"Board {b.board}, measured at {b.power:g} %"
+    )
+    for lead, spec in sorted(b.spectra.items(), key=lambda kv: centroid(_points(b, kv[1])) or 0):
+        pts = _points(b, spec)
+        table.add_row(str(lead), ",".join(map(str, b.groups[lead])), _fmt(centroid(pts), ".1f"), f"{max(spec):.4g}")
+    console.print(table)
+
+
+def _points(b, spec):
+    return [(b.start + i, v) for i, v in enumerate(spec)]
+
+
+FluxOptions = tuple[float | None, float | None, float | None]
+
+
+def _one_flux(photons, radiometric, power) -> FluxOptions:
+    if sum(x is not None for x in (photons, radiometric, power)) > 1:
+        raise typer.BadParameter("give only one of --photons, --radiometric, --power")
+    if photons is None and radiometric is None and power is None:
+        power = 50.0
+    return photons, radiometric, power
+
+
+PhotonsOption = Annotated[float | None, typer.Option("--photons", help="Photon flux, photons/s/cm2 (or /sr).")]
+RadiometricOption = Annotated[float | None, typer.Option("--radiometric", help="Radiant power, uW/cm2 (or /sr).")]
+PowerOption = Annotated[float | None, typer.Option("--power", help="Drive level, % (default 50 if none given).")]
+
+
+def _mono_table(title: str) -> Table:
+    return Table(
+        "Channel", "Nominal (nm)", "Centroid", "Peak", "FWHM", "Power %", "Radiometric", "Photons/s/cm2", title=title
+    )
+
+
+def _mono_row(table: Table, s) -> None:
+    table.add_row(
+        ",".join(map(str, s.members)),
+        f"{s.nominal_nm:.1f}",
+        _fmt(s.centroid_nm, ".1f"),
+        _fmt(s.peak_nm, ".0f"),
+        _fmt(s.fwhm_nm, ".1f"),
+        f"{s.power:.3f}" + (" [red](limit)[/]" if s.at_limit else ""),
+        f"{s.radiometric:.4g}",
+        f"{s.photon_flux:.4e}",
+    )
+
+
+@app.command()
+def mono(
+    wavelength: Annotated[float, typer.Argument(help="Wavelength (nm); the narrow channel closest to it is used.")],
+    photons: PhotonsOption = None,
+    radiometric: RadiometricOption = None,
+    power: PowerOption = None,
+):
+    """Switch on one channel only, closest to WAVELENGTH, at a photon flux, radiant power or drive level."""
+    from .mono import mono_channels, set_mono
+
+    photons, radiometric, power = _one_flux(photons, radiometric, power)
+    with connect() as r:
+        channels = mono_channels(r)
+        lead = min(channels, key=lambda c: abs(c[2] - wavelength))[0]
+        step = set_mono(r, lead, photons, radiometric, power)
+    table = _mono_table("Monochromatic output")
+    _mono_row(table, step)
+    console.print(table)
+
+
+@app.command()
+def scan(
+    start: Annotated[int, typer.Option(help="From (nm).")] = 360,
+    end: Annotated[int, typer.Option(help="To (nm).")] = 1100,
+    photons: PhotonsOption = None,
+    radiometric: RadiometricOption = None,
+    power: PowerOption = None,
+    dwell: Annotated[float, typer.Option(help="Seconds to stay on each channel.")] = 1.0,
+    out: Annotated[Path | None, typer.Option("--csv", help="Write the steps to this CSV file.")] = None,
+):
+    """Step through the narrow channels by wavelength, one at a time (e.g. for spectral response / QE).
+
+    The unit's original state is restored at the end (also on Ctrl+C).
+    """
+    import time
+
+    from .mono import mono_scan
+
+    photons, radiometric, power = _one_flux(photons, radiometric, power)
+    table = _mono_table(f"Scan {start}-{end} nm")
+    steps = []
+    with connect() as r:
+        try:
+            for step in mono_scan(r, start, end, photons, radiometric, power):
+                steps.append(step)
+                console.print(
+                    f"{step.nominal_nm:7.1f} nm  channel {step.channel:2d}  {step.power:7.3f} %  "
+                    f"{step.photon_flux:.3e} photons/s/cm2" + ("  (at limit)" if step.at_limit else "")
+                )
+                time.sleep(dwell)
+        except KeyboardInterrupt:
+            err.print("stopped; original state restored")
+    for step in steps:
+        _mono_row(table, step)
+    console.print(table)
+    if out:
+        _write_rows(out, [vars(s) | {"members": " ".join(map(str, s.members))} for s in steps])
+
+
+# ---- characterizing the unit --------------------------------------------------------------------------
+
+
+@app.command()
+def dimming(
+    channel: Annotated[
+        int | None, typer.Option("--channel", "-c", help="One channel (others off) instead of the whole spectrum.")
+    ] = None,
+    levels: Annotated[str, typer.Option(help="Comma-separated levels in %.")] = "1,2,5,10,20,50,100",
+    out: Annotated[Path | None, typer.Option("--csv", help="Write the rows to this CSV file.")] = None,
+):
+    """How the output, color and wavelength change with the drive level. Restores the unit afterwards."""
+    from .characterize import dimming as run
+
+    values = [float(v) for v in levels.split(",")]
+    rows = []
+    with connect() as r:
+        for row in run(r, values, channel):
+            rows.append(row)
+            console.print("  ".join(f"{k} {_fmt(v, '.5g') if isinstance(v, float) else v}" for k, v in row.items()))
+    if out:
+        _write_rows(out, rows)
+
+
+@app.command()
+def monitor(
+    interval: Annotated[float, typer.Option(help="Seconds between readings.")] = 10.0,
+    duration: Annotated[float, typer.Option(help="Total seconds (0 = until Ctrl+C).")] = 600.0,
+    out: Annotated[Path | None, typer.Option("--csv", help="Write the rows to this CSV file.")] = None,
+):
+    """Log output, measured output, color and temperatures over time (warm-up, drift). Changes nothing."""
+    from .characterize import monitor as run
+
+    rows = []
+    with connect() as r:
+        try:
+            for row in run(r, interval, duration):
+                rows.append(row)
+                console.print("  ".join(f"{k} {_fmt(v, '.6g') if isinstance(v, float) else v}" for k, v in row.items()))
+                if out:
+                    _write_rows(out, rows, quiet=True)  # keep the file current during long runs
+        except KeyboardInterrupt:
+            pass
+    if out:
+        console.print(f"wrote {out}")
+
+
+def _write_rows(path: Path, rows: list[dict], quiet: bool = False) -> None:
+    if not rows:
+        return
+    with path.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    if not quiet:
+        console.print(f"wrote {path}")
+
+
+# ---- snapshots ------------------------------------------------------------------------------------------
+
+
+@app.command()
+def save(
+    path: Annotated[Path, typer.Argument(help="JSON file to write.")],
+    note: Annotated[str, typer.Option(help="Free text stored with it.")] = "",
+):
+    """Save the channel powers and the spectrum they give (changes nothing)."""
+    from .snapshot import take
+
+    with connect() as r:
+        snap = take(r, note)
+    snap.save(path)
+    xy = f"x={snap.xy[0]:.4f} y={snap.xy[1]:.4f}" if snap.xy else "off"
+    console.print(f"saved {len(snap.powers)} channels, {snap.photometric:.4g} photometric, {xy} to {path}")
+
+
+@app.command()
+def restore(path: Annotated[Path, typer.Argument(help="JSON file written by `rs7 save`.")]):
+    """Put the unit back to a saved state."""
+    from .snapshot import Snapshot
+    from .snapshot import restore as do_restore
+
+    snap = Snapshot.load(path)
+    with connect() as r:
+        do_restore(r, snap)
+    console.print(f"restored {path} ({snap.time}{', ' + snap.note if snap.note else ''})")
 
 
 # ---- bridge and GUI --------------------------------------------------------------------------------

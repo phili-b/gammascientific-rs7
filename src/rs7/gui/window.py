@@ -6,7 +6,9 @@ values are read before a job is queued, and results are shown when it comes back
 
 from __future__ import annotations
 
+import csv
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, Qt, QTimer
@@ -41,7 +43,9 @@ from ..colorimetry import ColorReport, analyze, compare
 from ..device import FTDI_IDS, RS7, ChannelInfo, PeakType, RS7Error, Units
 from ..illuminants import available, describe, target_spectrum
 from ..match import ANALYSIS_RANGE, MatchResult, match, scale_to_level
-from ..spectrum import cct_to_xy
+from ..snapshot import Snapshot, take
+from ..snapshot import restore as restore_snapshot
+from ..spectrum import cct_to_xy, load_csv
 from .widgets import CieChart, SpectrumPlot, wavelength_color
 from .worker import Worker
 
@@ -151,6 +155,7 @@ class MainWindow(QMainWindow):
         self.spec: list[tuple[int, float]] = []
         self.chan_specs: dict[int, list[tuple[int, float]]] = {}
         self.target_spec: list[tuple[int, float]] = []
+        self.references: list[tuple[str, list[tuple[float, float]]]] = []  # overlays: (label, spectrum)
         self.phot_unit = "cd/m2"
         self.xy: tuple[float, float] | None = None
 
@@ -339,6 +344,13 @@ class MainWindow(QMainWindow):
         rng.addWidget(self.fit_start)
         rng.addWidget(self.fit_end)
         f.addRow("Fit range", rng)
+        self.method = QComboBox()
+        self.method.addItems(["Local optimizer", "RS-7 firmware"])
+        self.method.setToolTip(
+            "Local optimizer: solves the channel powers on the PC (better spectral match; measures every channel "
+            "once, about 25 s). RS-7 firmware: the unit's own fit (FTS)."
+        )
+        f.addRow("Fit with", self.method)
         self.correct = QCheckBox("Correct chromaticity after fit")
         self.correct.setChecked(True)
         f.addRow(self.correct)
@@ -372,6 +384,15 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_menu(self):
+        file = self.menuBar().addMenu("&File")
+        file.addAction("Save Snapshot...", self._save_snapshot)
+        file.addAction("Restore Snapshot...", self._restore_snapshot)
+        file.addSeparator()
+        file.addAction("Save Spectrum as CSV...", self._save_spectrum)
+        file.addAction("Export Plot as PNG...", self._export_plot)
+        file.addSeparator()
+        file.addAction("Add Reference Spectrum...", self._add_reference)
+        file.addAction("Clear Reference Spectra", self._clear_references)
         settings = self.menuBar().addMenu("&Settings")
         self.port_menu = settings.addMenu("Select COM Port")
         self.port_menu.aboutToShow.connect(self._fill_ports)
@@ -709,6 +730,7 @@ class MainWindow(QMainWindow):
             [(float(n), v) for n, v in self.spec],
             [([(float(n), v) for n, v in s], c) for s, c in channels],
             target,
+            [([(float(n), v) for n, v in s if start <= n <= end], label) for label, s in self.references],
         )
 
     # ---- presets -------------------------------------------------------------------------------------------
@@ -768,9 +790,10 @@ class MainWindow(QMainWindow):
         units = Units.PHOTOMETRIC if self.level_units.currentIndex() == 0 else Units.RADIOMETRIC
         at_max, white, correct = self.at_max.isChecked(), self.include_white.isChecked(), self.correct.isChecked()
         start, end = self.fit_start.value(), self.fit_end.value()
+        method = "local" if self.method.currentIndex() == 0 else "firmware"
 
         def run(r: RS7) -> MatchResult:
-            return match(r, name, level, units, at_max, start, end, white, correct)
+            return match(r, name, level, units, at_max, start, end, white, correct, method)
 
         self.match_result.setText("matching...")
         self._run(run, then=self._show_match)
@@ -780,8 +803,68 @@ class MainWindow(QMainWindow):
         delta = "-" if c.delta_uv_prime is None else f"{c.delta_uv_prime:.4f}"
         self.match_result.setText(
             f"Matched {describe(res.target_name)} at {res.output.photometric:.4g} {self.phot_unit}: "
-            f"\u0394u'v' {delta}, RS-7 spectral error {res.unit_rms_error:.1f} %"
+            f"\u0394u'v' {delta}, spectral RMS {c.spectral_rms or 0:.1f} %"
         )
+
+    # ---- files: snapshots, CSV, PNG, reference overlays ------------------------------------------------------
+
+    def _save_snapshot(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save snapshot", "rs7-snapshot.json", "Snapshot (*.json)")
+        if path:
+
+            def saved(snap: Snapshot) -> None:
+                snap.save(path)
+                self._flash_ok(f"saved {path}")
+
+            self._do(take, saved)
+
+    def _restore_snapshot(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Restore snapshot", "", "Snapshot (*.json)")
+        if path:
+            try:
+                snap = Snapshot.load(path)
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                self._error(e)
+                return
+            self._run(lambda r: restore_snapshot(r, snap), then=lambda _: self._flash_ok(f"restored {path}"))
+
+    def _save_spectrum(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save spectrum", "rs7-spectrum.csv", "CSV (*.csv)")
+        if path:
+            with open(path, "w", newline="") as f:
+                csv.writer(f).writerows([("nm", "value"), *self.spec])
+            self._flash_ok(f"saved {path}")
+
+    def _export_plot(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Export plot", "rs7-spectrum.png", "PNG (*.png)")
+        if path:
+            self.plot.grab().save(path)
+            self._flash_ok(f"saved {path}")
+
+    def _add_reference(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Reference spectrum", "", "Spectrum (*.csv *.txt *.json);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            points = (
+                [(float(n), v) for n, v in Snapshot.load(path).spectrum]
+                if path.lower().endswith(".json")
+                else load_csv(path)
+            )
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            self._error(e)
+            return
+        self.references.append((Path(path).stem, points))
+        self._draw_plot()
+
+    def _clear_references(self):
+        self.references = []
+        self._draw_plot()
+
+    def _flash_ok(self, message: str):
+        self.status_label.setText(message)
 
     # ---- settings -------------------------------------------------------------------------------------------------
 

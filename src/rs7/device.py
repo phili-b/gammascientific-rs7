@@ -269,6 +269,27 @@ class RS7:
                 out.append(ChannelInfo(int(channel), *values))
         return out
 
+    def channel_groups(self) -> dict[int, list[int]]:
+        """Fitted channels that are set together, keyed by their first channel (``GRP``/``CGL``).
+
+        With grouping on, setting any member of a group sets the whole group; channels that are not in
+        a group map to themselves, e.g. ``{3: [3, 5, 30], 4: [4], ...}``.
+        """
+        fitted = [c.channel for c in self.channel_info()]
+        groups: dict[int, list[int]] = {}
+        grouped: set[int] = set()
+        if self.command("GRP")[0] == "1":
+            for line in self.command("CGL", multiline=True):
+                _, *members = (int(x) for x in line.split(","))
+                members = [m for m in members if m in fitted]
+                if members:
+                    groups[members[0]] = members
+                    grouped.update(members)
+        for c in fitted:
+            if c not in grouped:
+                groups[c] = [c]
+        return dict(sorted(groups.items()))
+
     # ---- total output ---------------------------------------------------------------
 
     def output(self, units: Units | None = None) -> float:

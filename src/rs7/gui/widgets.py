@@ -26,10 +26,23 @@ class SpectrumPlot(QWidget):
         self.output: Series = []
         self.channels: list[tuple[Series, QColor]] = []
         self.target: Series = []
+        self.references: list[tuple[Series, str]] = []
 
-    def set_data(self, start: int, end: int, output: Series, channels: list[tuple[Series, QColor]], target: Series):
+    REFERENCE_COLORS = ("#e0a030", "#40c0a0", "#c060e0", "#a0a0a0")
+
+    def set_data(
+        self,
+        start: int,
+        end: int,
+        output: Series,
+        channels: list[tuple[Series, QColor]],
+        target: Series,
+        references: list[tuple[Series, str]] | None = None,
+    ):
+        """``references`` are overlays (e.g. saved spectra), drawn dashed with a legend, on the same scale."""
         self.start, self.end = start, end
         self.output, self.channels, self.target = output, channels, target
+        self.references = references or []
         self.update()
 
     def paintEvent(self, event):
@@ -38,7 +51,9 @@ class SpectrumPlot(QWidget):
         p.fillRect(self.rect(), QColor("#101010"))
         left, bottom, top, right = 55, 24, 10, 10
         w, h = self.width(), self.height()
+        refs = [(s, QColor(self.REFERENCE_COLORS[i % 4]), label) for i, (s, label) in enumerate(self.references)]
         series = [(self.output, QColor("white")), *self.channels, (self.target, QColor("#4080ff"))]
+        series += [(s, c) for s, c, _ in refs]
         ymax = max((v for s, _ in series for _, v in s), default=0) or 1.0
         span = max(self.end - self.start, 1)
 
@@ -71,8 +86,17 @@ class SpectrumPlot(QWidget):
                 path = QPainterPath(pt(*s[0]))
                 for nm, v in s[1:]:
                     path.lineTo(pt(nm, v))
-                p.setPen(QPen(color, 1.5))
+                pen = QPen(color, 1.5)
+                if any(color is c for _, c, _ in refs):
+                    pen.setStyle(Qt.PenStyle.DashLine)
+                p.setPen(pen)
                 p.drawPath(path)
+        for i, (_, color, label) in enumerate(refs):  # legend, top right
+            y = top + 4 + 16 * i
+            p.setPen(QPen(color, 1.5, Qt.PenStyle.DashLine))
+            p.drawLine(QPointF(w - right - 150, y + 7), QPointF(w - right - 125, y + 7))
+            p.setPen(QColor("#c0c0c0"))
+            p.drawText(QRectF(w - right - 120, y, 120, 14), Qt.AlignmentFlag.AlignLeft, label)
 
 
 class CieChart(QWidget):

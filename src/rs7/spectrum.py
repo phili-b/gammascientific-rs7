@@ -107,3 +107,40 @@ def wavelength_to_rgb(nm: float) -> tuple[int, int, int]:
     else:
         r, g, b = max(0.35, 1 - (nm - 700) / 400), 0.0, 0.0
     return int(r * 255), int(g * 255), int(b * 255)
+
+
+# ---- properties of a measured spectrum ([(nm, value), ...] at 1 nm) -----------------------------------------
+
+PLANCK = 6.62607015e-34  # J s
+LIGHT_SPEED = 2.99792458e8  # m/s
+
+
+def centroid(spectrum) -> float | None:
+    """Power-weighted mean wavelength (nm)."""
+    total = sum(v for _, v in spectrum)
+    return sum(nm * v for nm, v in spectrum) / total if total > 0 else None
+
+
+def fwhm(spectrum) -> float | None:
+    """Full width at half maximum (nm), outermost half-power crossings, linearly interpolated."""
+    if not spectrum:
+        return None
+    peak = max(v for _, v in spectrum)
+    if peak <= 0:
+        return None
+    half = peak / 2
+    above = [i for i, (_, v) in enumerate(spectrum) if v >= half]
+    lo, hi = above[0], above[-1]
+
+    def cross(i, j):  # wavelength where the line from point i to j crosses half
+        (n1, v1), (n2, v2) = spectrum[i], spectrum[j]
+        return n1 if v1 == v2 else n1 + (half - v1) * (n2 - n1) / (v2 - v1)
+
+    left = cross(lo - 1, lo) if lo > 0 else spectrum[lo][0]
+    right = cross(hi, hi + 1) if hi + 1 < len(spectrum) else spectrum[hi][0]
+    return right - left
+
+
+def photon_flux(spectrum) -> float:
+    """Photon flux in photons/s/cm2 (or /sr) of a spectrum in uW/cm2/nm (or /sr), 1 nm steps."""
+    return sum(v * 1e-6 * nm * 1e-9 / (PLANCK * LIGHT_SPEED) for nm, v in spectrum)

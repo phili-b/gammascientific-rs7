@@ -1,13 +1,14 @@
 [project]
 name = "gammascientific-rs7"
-version = "0.3.0"
+version = "0.4.0"
 description = "Python API, CLI and desktop GUI for the Gamma Scientific SpectralLED RS-7 light source"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "colour-science>=0.4.6",
     "pyserial>=3.5",
     "rich>=13",
+    "scipy>=1.16",
     "typer>=0.12",
 ]
 
@@ -40,7 +41,7 @@ module-name = "rs7"
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
