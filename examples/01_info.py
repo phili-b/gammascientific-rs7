@@ -1,9 +1,10 @@
 """Print what the RS-7 is and what it is doing, without changing anything."""
+
 import sys
 
 from rs7 import RS7, Units
 
-port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB0"
+port = sys.argv[1] if len(sys.argv) > 1 else None  # None: first RS-7 found
 
 with RS7(port) as rs7:
     print("firmware     ", rs7.version())

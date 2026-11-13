@@ -1,10 +1,11 @@
 """Sweep the total illuminance of the present spectrum, keeping its color, e.g. for a sensor linearity test."""
+
 import sys
 import time
 
 from rs7 import RS7, Units
 
-port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB0"
+port = sys.argv[1] if len(sys.argv) > 1 else None  # None: first RS-7 found
 LEVELS = [10, 20, 50, 100, 200, 500]  # lux (or nits)
 
 with RS7(port) as rs7:

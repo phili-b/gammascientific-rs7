@@ -1,16 +1,35 @@
 """RS-7 ASCII command API (manual section 4) over a serial port."""
+
 from __future__ import annotations
 
 import contextlib
 import enum
 import time
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from typing import Callable, Iterator, Optional
 
 import serial
+from serial.tools import list_ports
 
-DEFAULT_PORT = "/dev/ttyUSB0"
 DEFAULT_BAUDRATE = 460800  # the unit can also be configured for 115200
+FTDI_IDS = {(0x0403, 0x6001)}  # FT232R USB UART inside the RS-7
+
+
+class PortNotFoundError(OSError):
+    """No RS-7 (FTDI FT232R) serial port was found."""
+
+
+def find_ports() -> list[str]:
+    """Serial ports that look like an RS-7, e.g. ``["/dev/ttyUSB0"]`` or ``["COM5"]``."""
+    return [p.device for p in list_ports.comports() if (p.vid, p.pid) in FTDI_IDS]
+
+
+def find_port() -> str:
+    """The first serial port that looks like an RS-7; raises :class:`PortNotFoundError` if there is none."""
+    ports = find_ports()
+    if not ports:
+        raise PortNotFoundError("no RS-7 found: no FTDI FT232R serial port is connected (pass the port explicitly)")
+    return ports[0]
 
 
 class RS7Error(Exception):
@@ -51,16 +70,19 @@ class RS7:
     """One RS-7.
 
     ``port`` is a device name (``"/dev/ttyUSB0"``, ``"COM5"``, or any pyserial URL such as
-    ``"socket://host:5000"``), or an already open serial object.
+    ``"socket://host:5000"``), or an already open serial object. Leave it out to use the first
+    RS-7 found (see :func:`find_port`).
 
-    >>> with RS7("/dev/ttyUSB0") as rs7:          # doctest: +SKIP
+    >>> with RS7() as rs7:          # doctest: +SKIP
     ...     rs7.set_channel_power(5, 10)
     """
 
-    def __init__(self, port=DEFAULT_PORT, baudrate: int = DEFAULT_BAUDRATE, timeout: float = 10.0):
+    def __init__(self, port=None, baudrate: int = DEFAULT_BAUDRATE, timeout: float = 10.0):
         # timeout is per line: commands that wait for the output to settle can take seconds.
         #: Optional ``callback(command, reply, is_error)`` called for every command (used by the GUI).
-        self.on_command: Optional[Callable[[str, str, bool], None]] = None
+        self.on_command: Callable[[str, str, bool], None] | None = None
+        if port is None:
+            port = find_port()
         if isinstance(port, str):
             port = serial.serial_for_url(port, baudrate=baudrate, timeout=timeout)
             # Opening the port can leave a stray character in the unit's input; flush it out.
@@ -72,7 +94,7 @@ class RS7:
     def close(self) -> None:
         self._ser.close()
 
-    def __enter__(self) -> "RS7":
+    def __enter__(self) -> RS7:
         return self
 
     def __exit__(self, *exc) -> None:
@@ -125,16 +147,21 @@ class RS7:
             self.on_command(cmd, reply, is_error)
 
     @contextlib.contextmanager
-    def _in_units(self, units: Optional[Units]) -> Iterator[None]:
-        """Temporarily switch the (global) units, then put them back."""
+    def using_units(self, units: Units | None) -> Generator[None, None, None]:
+        """Temporarily switch the (global) units, then put them back. ``None`` leaves them alone.
+
+        >>> with rs7.using_units(Units.PHOTOMETRIC):    # doctest: +SKIP
+        ...     rs7.set_channel_power(5, 100)            # 100 lux from channel 5
+        """
         old = self.units() if units is not None else None
-        if units is not None and old != units:
-            self.set_units(units)
+        if units is None or old is None or old == units:
+            yield
+            return
+        self.set_units(units)
         try:
             yield
         finally:
-            if units is not None and old != units:
-                self.set_units(old)
+            self.set_units(old)
 
     # ---- identity and housekeeping --------------------------------------------
 
@@ -218,7 +245,7 @@ class RS7:
     def channel_powers(self) -> dict[int, float]:
         """All channels that are on, as ``{channel: power}``."""
         lines = self.command("SCP 0", multiline=True)
-        return {int(c): float(p) for c, p in (l.split(",") for l in lines)}
+        return {int(c): float(p) for c, p in (line.split(",") for line in lines)}
 
     def set_channel_power(self, channel: int, power: float) -> None:
         """Set one channel. Returns when the output has settled."""
@@ -244,19 +271,19 @@ class RS7:
 
     # ---- total output ---------------------------------------------------------------
 
-    def output(self, units: Optional[Units] = None) -> float:
+    def output(self, units: Units | None = None) -> float:
         """Total output. ``units`` temporarily overrides the current units."""
-        with self._in_units(units):
+        with self.using_units(units):
             return float(self.command("OUT")[0])
 
-    def set_output(self, level: float, units: Optional[Units] = None, keep_chromaticity: bool = False) -> None:
+    def set_output(self, level: float, units: Units | None = None, keep_chromaticity: bool = False) -> None:
         """Set the total output, optionally touching up the spectrum to hold the chromaticity (``OUTC``)."""
-        with self._in_units(units):
+        with self.using_units(units):
             self.command(f"{'OUTC' if keep_chromaticity else 'OUT'} {level}")
 
-    def actual_output(self, units: Optional[Units] = None) -> float:
+    def actual_output(self, units: Units | None = None) -> float:
         """Output as sampled by the monitor photodiode (``OUTA``)."""
-        with self._in_units(units):
+        with self.using_units(units):
             return float(self.command("OUTA")[0])
 
     def chromaticity(self) -> tuple[float, float]:
@@ -319,7 +346,7 @@ class RS7:
         """
         self.command("FTS M" if at_max else "FTS W" if include_white else "FTS")
 
-    def color_correct(self, xy: Optional[tuple[float, float]] = None) -> None:
+    def color_correct(self, xy: tuple[float, float] | None = None) -> None:
         """Correct the output chromaticity to the target spectrum, or to ``xy``."""
         self.command(f"CCS {xy[0]},{xy[1]}" if xy else "CCS")
 
@@ -332,7 +359,7 @@ class RS7:
     def presets(self) -> dict[int, str]:
         """Stored presets as ``{number: name}``."""
         lines = self.command("PRE *", multiline=True)
-        return {int(n): name for n, _, name in (l.partition(",") for l in lines)}
+        return {int(n): name for n, _, name in (line.partition(",") for line in lines)}
 
     def current_preset(self) -> str:
         """``"NONE"`` or ``"<number>,<name>"`` of the loaded preset."""

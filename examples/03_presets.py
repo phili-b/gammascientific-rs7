@@ -1,10 +1,11 @@
 """List presets, load each one for a few seconds and report its color."""
+
 import sys
 import time
 
 from rs7 import RS7, Units
 
-port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB0"
+port = sys.argv[1] if len(sys.argv) > 1 else None  # None: first RS-7 found
 
 with RS7(port) as rs7:
     for number, name in rs7.presets().items():

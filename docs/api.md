@@ -7,10 +7,25 @@ you can look it up in the user manual (section 4).
 
 | Method | Command | Description |
 |---|---|---|
-| `RS7(port, baudrate=460800, timeout=10.0)` | | Open a port name, pyserial URL, or an open serial object |
+| `RS7(port=None, baudrate=460800, timeout=10.0)` | | Open a port name, pyserial URL (`socket://host:5000`), or an open serial object. `None`: the first RS-7 found, see `find_port()` |
 | `close()` | | Close the port (or use `with RS7(...)`) |
 | `command(cmd, multiline=False)` | any | Send a raw command, get reply lines (`[]` for "Ok") |
 | `on_command` | | Optional `callback(command, reply, is_error)` for logging |
+
+## Finding the port
+
+| Function | Description |
+|---|---|
+| `find_ports()` | List of serial ports that look like an RS-7 (FTDI FT232R, USB ID 0403:6001), e.g. `["/dev/ttyUSB0"]` or `["COM5"]` |
+| `find_port()` | The first of those; raises `PortNotFoundError` if there is none |
+| `PortNotFoundError` | Subclass of `OSError`; also raised by `RS7()` when no port is given and none is found |
+
+```python
+from rs7 import RS7, find_ports
+
+print(find_ports())
+rs7 = RS7(find_ports()[0])  # same as RS7()
+```
 
 ## Channels
 
@@ -28,6 +43,7 @@ you can look it up in the user manual (section 4).
 | Method | Command | Description |
 |---|---|---|
 | `units()` / `set_units(Units)` | `UNI` | Global units of power numbers |
+| `using_units(Units)` | `UNI` | Context manager: switch the units inside a `with` block, then restore them (`None` leaves them alone) |
 | `output(units=None)` | `OUT` | Total output |
 | `set_output(level, units=None, keep_chromaticity=False)` | `OUT` / `OUTC` | Scale the whole spectrum |
 | `actual_output(units=None)` | `OUTA` | Output measured by the monitor photodiode |
@@ -76,6 +92,12 @@ Helpers in `rs7.spectrum` (no hardware): `blackbody(cct, start, end)`, `load_csv
 
 Anything else (`SCA`, `PUL`, `ATF`, `IRI`, ...) can be sent with `command()`.
 
+## Sharing over TCP
+
+`rs7.bridge.serve(port, listen=5000, baudrate=460800, log=print)` forwards bytes between a serial port and
+one TCP client at a time; it is what `rs7 bridge` runs. Connect with `RS7("socket://host:5000")`. No
+authentication.
+
 ## Auto-generated reference
 
 ::: rs7.RS7
@@ -83,4 +105,8 @@ Anything else (`SCA`, `PUL`, `ATF`, `IRI`, ...) can be sent with `command()`.
 ::: rs7.PeakType
 ::: rs7.ChannelInfo
 ::: rs7.RS7Error
+::: rs7.PortNotFoundError
+::: rs7.find_port
+::: rs7.find_ports
 ::: rs7.spectrum
+::: rs7.bridge

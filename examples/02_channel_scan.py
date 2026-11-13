@@ -1,9 +1,10 @@
 """Switch each channel on in turn (by wavelength) and measure the output, then restore the spectrum."""
+
 import sys
 
 from rs7 import RS7, Units
 
-port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyUSB0"
+port = sys.argv[1] if len(sys.argv) > 1 else None  # None: first RS-7 found
 POWER = 20  # % of each channel's maximum
 
 with RS7(port) as rs7:

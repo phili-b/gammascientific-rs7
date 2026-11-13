@@ -1,24 +1,48 @@
-[build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "gammascientific-rs7"
-version = "0.1.0"
-description = "Python API and desktop GUI for the Gamma Scientific SpectralLED RS-7 light source"
+version = "0.2.0"
+description = "Python API, CLI and desktop GUI for the Gamma Scientific SpectralLED RS-7 light source"
 readme = "README.md"
-requires-python = ">=3.9"
-dependencies = ["pyserial>=3.5"]
+requires-python = ">=3.10"
+dependencies = [
+    "pyserial>=3.5",
+    "rich>=13",
+    "typer>=0.12",
+]
 
 [project.optional-dependencies]
-test = ["pytest"]
-docs = ["mkdocs", "mkdocs-material", "mkdocstrings[python]"]
+gui = ["pyside6>=6.6"]
 
 [project.scripts]
+rs7 = "rs7.cli:app"
 rs7-gui = "rs7.gui:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[dependency-groups]
+dev = [
+    "pyside6>=6.6",
+    "pytest>=8",
+    "ruff>=0.6",
+    "ty>=0.0.1a20",
+]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9",
+    "mkdocstrings[python]>=0.26",
+]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.20"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "rs7"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

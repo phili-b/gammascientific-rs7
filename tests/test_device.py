@@ -116,7 +116,7 @@ def test_spectrum():
 
 
 def test_set_target_spectrum_checks_length():
-    r, port = rs7("500,502\r\n")
+    r, _ = rs7("500,502\r\n")
     with pytest.raises(ValueError):
         r.set_target_spectrum([1.0, 2.0])
 
