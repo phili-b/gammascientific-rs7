@@ -18,6 +18,7 @@ Python API, command line tool and desktop GUI for the Gamma Scientific **Spectra
 - **color quality**: CCT, Duv, xy, u'v', CRI (Ra, R1-R14) and TM-30 (Rf, Rg) of the output and of the target, and the difference between them, computed on the PC with [colour-science](https://www.colour-science.org/)
 - **monochromatic steps and scans**: one narrow channel at a chosen photon flux, radiant power or drive level, or a scan through all narrow channels at equal photon flux (spectral response and QE measurements)
 - **characterization**: output, color and wavelength shift against drive level (dimming), and a log of output, color and temperature over time (warm-up, drift)
+- **camera color accuracy**: the RS-7 lights an X-Rite ColorChecker with a known spectrum and the package compares the colors a camera measures (raw frames from the `picam-web` service on a Raspberry Pi) with the colors the patches should have, as CIE ΔE2000 per patch, for several illuminants ([docs/camera.md](docs/camera.md))
 - **snapshots**: save the channel powers and spectrum to a JSON file and restore them later; the GUI can also draw saved spectra or CSV files as references, and export the spectrum as CSV or the plot as PNG
 - runs on Linux (including the Raspberry Pi) and Windows with Python 3.11 or newer; the CLI and API need `pyserial`, `typer`, `rich`, `scipy` and `colour-science` (numpy)
 
@@ -105,12 +106,15 @@ rs7 mono 550 --photons 1e13  # only the narrow channel nearest 550 nm, at 1e13 p
 rs7 scan --start 400 --end 700 --photons 1e13 --csv scan.csv  # every narrow channel in turn, equal flux
 rs7 dimming --channel 4      # how channel 4 changes (power, wavelength, width) with drive level
 rs7 monitor --interval 10 --duration 600 --csv log.csv       # output, color, temperature over time
+rs7 camera                   # the camera on the Raspberry Pi: model, mode, exposure, gain, black level (read-only)
+rs7 chart --png chart.png    # check where the ColorChecker is: overlay image and R, G, B of each patch (read-only)
+rs7 colorcheck --illuminants D65,A  # camera color accuracy (ΔE2000) under D65 and A; changes the light, restores it
 rs7 save state.json          # save the channel powers and spectrum
 rs7 restore state.json       # put the unit back
 rs7 off
 ```
 
-Without `--port` / `-p` (or the `RS7_PORT` environment variable) the first RS-7 found is used. `rs7 --help` lists all commands; they are described in [docs/cli.md](docs/cli.md); the spectral matching and the color metrics are explained in [docs/colorimetry.md](docs/colorimetry.md), and the monochromatic scans, dimming, monitoring and snapshots in [docs/tools.md](docs/tools.md). `rs7 bridge` shares the unit over TCP so another machine can use it.
+Without `--port` / `-p` (or the `RS7_PORT` environment variable) the first RS-7 found is used. `rs7 --help` lists all commands; they are described in [docs/cli.md](docs/cli.md); the spectral matching and the color metrics are explained in [docs/colorimetry.md](docs/colorimetry.md), the monochromatic scans, dimming, monitoring and snapshots in [docs/tools.md](docs/tools.md), and the camera color accuracy in [docs/camera.md](docs/camera.md). `rs7 bridge` shares the unit over TCP so another machine can use it.
 
 ## GUI
 
@@ -124,6 +128,7 @@ or `rs7 gui` or `python -m rs7.gui`. Pick a port under **Settings > Select COM P
 - [Command line](docs/cli.md)
 - [Spectral matching and color quality](docs/colorimetry.md)
 - [Spectral tools](docs/tools.md): monochromatic scans, dimming, monitoring, snapshots
+- [Camera color accuracy](docs/camera.md): ColorChecker, color matrix, ΔE2000
 - [API reference](docs/api.md)
 - [GUI](docs/gui.md)
 - [Serial protocol notes](docs/protocol.md)

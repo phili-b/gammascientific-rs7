@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import enum
+import io
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated
@@ -19,6 +21,11 @@ from .camera import DEFAULT_URL as DEFAULT_CAMERA
 from .chart import CHART_FILE
 from .device import FTDI_IDS, RS7, PortNotFoundError, RS7Error, Units
 from .spectrum import cct_to_xy
+
+# A console or pipe in cp1252 cannot show the delta of Δu'v' and ΔE: print "?" there instead of crashing.
+for _stream in (sys.stdout, sys.stderr):
+    if isinstance(_stream, io.TextIOWrapper):
+        _stream.reconfigure(errors="replace")
 
 app = typer.Typer(help="Control a Gamma Scientific SpectralLED RS-7 light source.", no_args_is_help=True)
 preset_app = typer.Typer(help="List, load, store and delete presets.", no_args_is_help=True)

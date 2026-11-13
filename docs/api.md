@@ -2,7 +2,8 @@
 
 Everything to control the unit is in `rs7.RS7`; the spectral matching and color quality functions are in
 `rs7.illuminants`, `rs7.colorimetry` and `rs7.match`; the local fit, monochromatic steps, characterization and
-snapshots are in `rs7.optimize`, `rs7.mono`, `rs7.characterize` and `rs7.snapshot` (see below). Each `RS7`
+snapshots are in `rs7.optimize`, `rs7.mono`, `rs7.characterize` and `rs7.snapshot` (see below). The camera color accuracy
+functions are in `rs7.camera`, `rs7.chart` and `rs7.colorcheck`. Each `RS7`
 method sends one or a few RS-7 commands; the command is named so you can look it up in the user manual
 (section 4). The package needs Python 3.11 or newer.
 
@@ -229,6 +230,89 @@ with RS7() as rs7:
     restore(rs7, Snapshot.load("state.json"))
 ```
 
+## Camera color accuracy
+
+Raw images from a camera and the accuracy of its color under the RS-7's light; see
+[Camera color accuracy](camera.md). Only numpy is needed besides the core dependencies.
+
+### Camera: `rs7.camera`
+
+Client of the camera service `picam-web` on the Raspberry Pi (HTTP, `DEFAULT_URL = "http://10.61.100.206"`). The
+service owns the camera, so nothing here opens it directly. Errors raise `CameraError`.
+
+| Function / class | Description |
+|---|---|
+| `PicamWeb(url=DEFAULT_URL, timeout=30.0)` | The client. Reading never changes the camera; `set_controls()`, `set_exposure()` and `manual_exposure()` do |
+| `info()`, `metadata()` | Sensor properties, modes and configuration (`/api/info`); metadata of the latest frame (`/api/metadata`: `ExposureTime` in us, `AnalogueGain`, `SensorBlackLevels`...) |
+| `controls()`, `exposure_range()` | Present value of each control that has one, e.g. `{"AeEnable": False, "ExposureTime": 67402}`; shortest and longest exposure time in us |
+| `set_controls(**controls)` | Change libcamera controls, e.g. `set_controls(AeEnable=False, ExposureTime=20000)` |
+| `capture(count=1)` | `count` raw frames at the present settings, as a `RawCapture` |
+| `set_exposure(exposure_us, gain=1.0, timeout=15.0)` | Fixed exposure and gain (auto exposure off). Returns when the frames use them; raises `CameraError` after `timeout` seconds |
+| `manual_exposure(exposure_us, gain=1.0)` | Context manager: a fixed exposure inside the `with` block, and the earlier auto exposure, exposure and gain put back after, also on an error |
+| `RawCapture` | `frames` (count, height, width; float64, DN of the sensor mode, black level not subtracted), `black_level` (DN), `bit_depth`, `exposure_us`, `analogue_gain`, `pattern` (`"GRBG"`: the 2 x 2 Bayer cell row by row from the top-left pixel) and `metadata` (of every frame). `full_scale` is the highest DN, `2**bit_depth - 1` |
+| `parse_npz(data)` | Read the `.npz` returned by `/api/capture/raw` into a `RawCapture`. The black level of the metadata (16-bit units) is scaled to the bit depth of the mode |
+| `bayer_means(frame, roi, pattern="GRBG", black=0.0)` | Mean R, G, B of the pixels of each color in `roi = (x, y, w, h)`, black level subtracted (G is the mean of both green sites), and the highest raw value in the ROI. The color follows the absolute pixel position, so an ROI at an odd position works too |
+
+```python
+from rs7.camera import PicamWeb, bayer_means
+
+cam = PicamWeb()
+with cam.manual_exposure(20000):  # us; the camera controls are put back afterwards
+    capture = cam.capture(4)
+rgb, peak = bayer_means(capture.frames[0], (800, 600, 40, 40), capture.pattern, capture.black_level)
+print(rgb, peak / capture.full_scale)
+```
+
+### Chart geometry: `rs7.chart`
+
+| Function / class | Description |
+|---|---|
+| `ChartGeometry(corners=DEFAULT_CORNERS, rows=4, cols=6, roi_fraction=0.35)` | Position of the 24 patches. `corners` are the pixel positions of the centers of the corner patches: top-left, top-right, bottom-right, bottom-left; the others follow from a homography. `roi_fraction` is the side of the measured square as a fraction of the patch pitch |
+| `homography()`, `project(u, v)` | The 3 x 3 matrix from grid coordinates (column, row) to image pixels, and its application |
+| `patch_centers()`, `patch_rois()` | (24, 2) pixel positions of the centers, and the 24 measured squares `(x, y, w, h)`, even in position and size so the Bayer phase is kept. Patches are numbered row by row from the top-left; white is the 19th (index 18) |
+| `save(path=CHART_FILE)`, `ChartGeometry.load(path=CHART_FILE)` | JSON file, `~/.rs7/chart.json` by default; `load()` returns the default geometry if the file does not exist |
+| `parse_corners(text)` | `"x1,y1 x2,y2 x3,y3 x4,y4"` to corners; raises `ValueError` |
+| `preview_png(capture, geometry, path)` | Write the image with the measured squares drawn on it (brightness stretched, gamma 2.2: it shows positions, not true colors). `write_png(path, rgb)` writes any 8-bit RGB array |
+
+### Color accuracy: `rs7.colorcheck`
+
+| Function | Description |
+|---|---|
+| `color_accuracy(rs7, cam, geometry, illuminants=("D65", "A", "LED-B3"), level=None, frames=4, method="local", progress=None)` | For each illuminant: make the light with `match()`, set the exposure, capture `frames` frames, fit the matrix and score it. `level` is in lux or cd/m2 (`None`: the present level). `progress(message)` is called at each step. The RS-7 state and the camera controls are restored at the end, also on an error. Returns a `ColorAccuracyResult`. Raises `ValueError` if the white patch is clipped or too dark |
+| `reference_xyz(spectrum)` | XYZ of the 24 patches (24, 3) and of the light's white (3,) under `spectrum` (`[(nm, value), ...]`), for the 2 degree observer and the reflectances of "ColorChecker N Ohta"; scaled so that a perfect white has Y = 100 |
+| `delta_e2000(xyz, white, ref_xyz, ref_white)` | CIE ΔE2000 per patch between `xyz` (seen against `white`) and `ref_xyz` (against `ref_white`), via CIELAB |
+| `measure_patches(capture, geometry)` | Black-subtracted R, G, B mean of each patch over all frames, as `PatchData` |
+| `auto_exposure(cam, geometry, target=0.6, captures=4)` | Exposure time in us at which the brightest channel of the white patch is `target` of full scale, found with at most `captures` images; the camera is left at it. A clipped white patch halves the exposure |
+| `fit_ccm(rgb, xyz, use=None)` | 3 x 3 matrix `M` with `xyz ~ rgb @ M.T` by least squares, over the patches where `use` is true |
+| `fit_illuminant(name, spectrum, patches)` | Fit and score the matrix for one light: an `IlluminantResult` |
+| `cross_accuracy(fitted, other)` | The matrix of `fitted` on the patches of `other`, after a von Kries white balance on the white patch: a `CrossResult` |
+
+The results are dataclasses:
+
+| Class | Fields |
+|---|---|
+| `ColorAccuracyResult` | `illuminants` (a list of `IlluminantResult`), `cross` (a list of `CrossResult`, the first light against each of the others) |
+| `IlluminantResult` | `illuminant`, `cct` (K) and `delta_uv_prime` of the light the RS-7 made, `patches` (`PatchData`), `ref_xyz` (24, 3), `white_xyz`, `ccm` (3 x 3, normalized camera RGB to XYZ), `accuracy`; `exposure_us` |
+| `CrossResult` | `illuminant`, `fitted_under`, `accuracy` |
+| `Accuracy` | `delta_e` (24,) and `used` (24, bool: patches not clipped or too dark); `mean`, `median` and `max` over the used patches |
+| `PatchData` | `rgb` (24, 3: DN, black subtracted, averaged over the frames), `peak` (24,), `exposure_us`, `gain`, `black_level`, `full_scale`; `normalized` (`rgb` per us and unit gain), `saturated`, `too_dark` and `excluded` (bool arrays) |
+
+`PATCH_NAMES` has the 24 patch names and `WHITE` (18) is the index of the white patch.
+
+```python
+from rs7 import RS7
+from rs7.camera import PicamWeb
+from rs7.chart import ChartGeometry
+from rs7.colorcheck import color_accuracy
+
+with RS7() as rs7:  # the light is changed during the run and restored after
+    result = color_accuracy(rs7, PicamWeb(), ChartGeometry.load(), ["D65", "A"])
+for res in result.illuminants:
+    print(res.illuminant, res.cct, res.accuracy.mean, res.accuracy.max)
+for cross in result.cross:
+    print(cross.illuminant, "with the matrix of", cross.fitted_under, cross.accuracy.mean)
+```
+
 ## Presets
 
 | Method | Command | Description |
@@ -280,4 +364,7 @@ authentication.
 ::: rs7.mono
 ::: rs7.characterize
 ::: rs7.snapshot
+::: rs7.camera
+::: rs7.chart
+::: rs7.colorcheck
 ::: rs7.bridge

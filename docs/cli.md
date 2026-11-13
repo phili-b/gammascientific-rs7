@@ -330,6 +330,88 @@ rs7 send VER "SCP 5"
 rs7 send --list "PRE *"
 ```
 
+### camera
+
+Show the camera and its present settings: model and sensor, mode (size, bit depth, Bayer format), auto exposure
+on or off, exposure time, analogue gain and black level. It only reads. The camera is the service `picam-web`
+on the Raspberry Pi; `--camera URL` (or the environment variable `RS7_CAMERA`, default `http://10.61.100.206`)
+says where it is. See [Camera color accuracy](camera.md).
+
+```
+rs7 camera
+rs7 camera --camera http://10.61.100.206
+```
+
+Exit code 2 if the camera service cannot be reached.
+
+### chart
+
+Check where the ColorChecker is in the raw image. It captures one frame at the present camera settings, writes
+an overlay PNG with the measured squares drawn inside the patches, and prints the mean R, G and B of every patch
+(black level subtracted) and its peak value. Patches that are clipped (98 % of full scale or more) or too dark
+(below 1 % of the usable range) are flagged. The camera settings are not changed.
+
+| Option | Description |
+|---|---|
+| `--corners` | Centers of the four corner patches in raw pixels, `"x1,y1 x2,y2 x3,y3 x4,y4"`: top-left, top-right, bottom-right, bottom-left. Saved in `~/.rs7/chart.json` and used from then on. Default: the saved geometry, or the one of the lab setup. |
+| `--png FILE` | The overlay image (default `chart.png`). |
+| `--camera URL` | The camera service (default `http://10.61.100.206`, or `RS7_CAMERA`). |
+
+```
+rs7 chart --png chart.png
+rs7 chart --corners "503,603 1310,552 1327,1043 535,1063"
+```
+
+Look at the PNG to see whether all 24 squares are inside their patches; see
+[Chart geometry](camera.md#chart-geometry).
+
+### colorcheck
+
+Measure how accurately the camera sees color under the RS-7's light. For each illuminant the RS-7 makes the
+light (as `match` does), the exposure is set so the white patch is about 60 % of full scale, `--frames` raw
+frames are averaged, and the patch colors are compared with the colors the patches should have under the RS-7's
+measured spectrum. A 3 x 3 matrix from camera RGB to XYZ is fitted to the patches and the error is the CIE
+ΔE2000. The method is described in [Method](camera.md#method).
+
+This changes the light and the camera exposure. The RS-7 state (from a snapshot) and the camera controls are put
+back at the end, also on an error. It needs the chart lit by the RS-7 only.
+
+| Option | Description |
+|---|---|
+| `--illuminants` | Comma-separated lights to make, as for `match` (see `illuminants`). Default `D65,A,LED-B3`. |
+| `--level`, `-l` | Light level in lux (cd/m2 for a radiant calibration). Default: keep the present level. |
+| `--frames` | Raw frames to average per light. Default 4. |
+| `--method`, `-m` | How the RS-7 is fitted to each light: `local` (default) or `firmware`. |
+| `--csv FILE` | Write the ΔE of every patch to this CSV file, with a column per light, whether the patch was used, and the cross-illuminant ΔE. |
+| `--camera URL` | The camera service (default `http://10.61.100.206`, or `RS7_CAMERA`). |
+
+```
+rs7 colorcheck
+rs7 colorcheck --illuminants D65,A
+rs7 colorcheck --illuminants D65,A,LED-B3 --frames 8 --level 500 --csv results.csv
+```
+
+Progress messages go to stderr. The output has three tables: a summary per light (CCT and Δu'v' of the light the
+RS-7 made, the exposure, and the mean, median and maximum ΔE), the ΔE of each of the 24 patches per light (patches
+that were clipped or too dark are shown dim and marked `excluded`; they are not in the fit or the statistics),
+and, with more than one light, the same statistics for the matrix fitted under the first light and used under the
+others after a white balance. The summary of the run described in [Measured example](camera.md#measured-example)
+(columns trimmed):
+
+```
+Light    CCT (K)   Δu'v' of the light   Exposure (ms)   Mean ΔE   Median ΔE   Max ΔE
+D65         6515   0.0003                         ~87      4.18        4.18     7.48
+A           2856   0.0000                         ~87      3.05        2.62     8.30
+LED-B3      4107   0.0002                         ~87      3.61        3.52     7.65
+
+Matrix fitted under D65, white-balanced
+Light    Mean ΔE   Median ΔE   Max ΔE
+A           6.01        5.65    12.03
+LED-B3      4.49        4.31     8.11
+```
+
+These are the numbers of one camera and setup, not a specification.
+
 ### bridge
 
 Share the unit over TCP so another machine can use it, for example when it is plugged into a Raspberry Pi.
