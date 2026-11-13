@@ -16,7 +16,7 @@ from serial.tools import list_ports
 
 from . import __version__
 from .device import FTDI_IDS, RS7, PortNotFoundError, RS7Error, Units
-from .spectrum import blackbody, cct_to_xy, load_csv, resample
+from .spectrum import cct_to_xy
 
 app = typer.Typer(help="Control a Gamma Scientific SpectralLED RS-7 light source.", no_args_is_help=True)
 preset_app = typer.Typer(help="List, load, store and delete presets.", no_args_is_help=True)
@@ -203,31 +203,141 @@ def color(
 
 
 @app.command()
-def fit(
-    source: Annotated[str, typer.Argument(help="Black-body temperature in K (e.g. 3000) or a CSV file (nm, value).")],
+def illuminants():
+    """List the target spectra that `match` and `measure` accept."""
+    from .colorimetry import analyze
+    from .illuminants import available, target_spectrum
+
+    table = Table("Name", "CCT (K)", "Duv", "x", "y", "CRI Ra", title="CIE illuminant library")
+    for name in available():
+        try:
+            rep = analyze([(360 + i, v) for i, v in enumerate(target_spectrum(name, 360, 830))])
+        except ValueError:
+            continue
+        x, y = rep.xy or (0, 0)
+        table.add_row(
+            name, _fmt(rep.cct, ".0f"), _fmt(rep.duv, "+.4f"), f"{x:.4f}", f"{y:.4f}", _fmt(rep.cri_ra, ".1f")
+        )
+    console.print(table)
+    console.print(
+        "Also: [bold]D<CCT>[/] CIE daylight at any 4000-25000 K (e.g. D5000), "
+        "[bold]<T>K[/] black body (e.g. 3000K), or a CSV file (nm, value)."
+    )
+
+
+@app.command()
+def match(
+    target: Annotated[
+        str, typer.Argument(help="D65, A, FL2, LED-B3, D5000, 3000K, a CSV file... (see `rs7 illuminants`)")
+    ],
+    level: Annotated[
+        float | None, typer.Option("--level", "-l", help="Total output to reach; default: keep the present level.")
+    ] = None,
+    units: Annotated[UnitName, typer.Option("--units", "-u", help="Units of --level.")] = UnitName.photometric,
+    at_max: Annotated[bool, typer.Option("--max", help="As bright as the soft limit allows.")] = False,
     start: Annotated[int, typer.Option(help="Fit range start (nm).")] = 380,
     end: Annotated[int, typer.Option(help="Fit range end (nm).")] = 780,
-    scale: Annotated[float, typer.Option(help="Multiply the target by this.")] = 1.0,
-    at_max: Annotated[bool, typer.Option("--max", help="Fit at the highest output the soft limit allows.")] = False,
-    white: Annotated[bool, typer.Option("--white", help="Include white channels.")] = False,
-    correct: Annotated[bool, typer.Option(help="Correct the chromaticity after the fit.")] = True,
+    white: Annotated[bool, typer.Option("--white", help="Also use the white channels.")] = False,
+    correct: Annotated[bool, typer.Option(help="Correct the color exactly after the spectral fit.")] = True,
+    out: Annotated[Path | None, typer.Option("--csv", help="Write nm, target, output to this CSV file.")] = None,
 ):
-    """Fit the output to a target spectrum."""
-    if Path(source).is_file():
-        target = resample(load_csv(source), start, end)
-    else:
-        try:
-            target = blackbody(float(source), start, end)
-        except ValueError as e:
-            raise typer.BadParameter(f"{source} is neither a file nor a temperature") from e
+    """Make the RS-7 reproduce a target spectrum (e.g. D65 at 500 lux) and report the match."""
+    from .match import match as do_match
+
     with connect() as r:
-        r.set_wavelength_range(start, end)
-        r.set_target_spectrum([v * scale for v in target])
-        r.fit(include_white=white, at_max=at_max)
-        if correct:
-            r.color_correct()
-        x, y = r.chromaticity()
-        console.print(f"RMS error {r.rms_error():.2f} %, x={x:.4f} y={y:.4f}, CCT {r.cct():.0f} K")
+        try:
+            result = do_match(r, target, level, units.units, at_max, start, end, white, correct)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
+        labels = _unit_labels(r)
+    _print_match(result, labels)
+    if out:
+        _write_pair_csv(out, result.target_spectrum, result.output_spectrum)
+
+
+@app.command()
+def measure(
+    target: Annotated[
+        str | None, typer.Option("--target", "-t", help="Also compare with this target (e.g. D65).")
+    ] = None,
+    start: Annotated[int, typer.Option(help="Comparison range start (nm).")] = 380,
+    end: Annotated[int, typer.Option(help="Comparison range end (nm).")] = 780,
+):
+    """Color quality of the present output: CCT, Duv, xy, u'v', CRI, TM-30 (changes nothing)."""
+    from .match import measure as do_measure
+    from .match import measure_against
+
+    with connect() as r:
+        labels = _unit_labels(r)
+        if target is None:
+            _print_reports([("Output", do_measure(r))], labels)
+            return
+        try:
+            result = measure_against(r, target, start, end)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
+    _print_match(result, labels)
+
+
+def _fmt(v, spec: str, none: str = "-") -> str:
+    return none if v is None else format(v, spec)
+
+
+def _unit_labels(r: RS7) -> tuple[str, str]:
+    """(radiometric, photometric) unit names for this unit's calibration."""
+    irradiant = r.working_distance() > 0 or r.calibration_type() == "I"
+    return ("uW/cm2", "lux") if irradiant else ("uW/cm2/sr", "cd/m2")
+
+
+def _print_reports(columns, labels: tuple[str, str], extra=None):
+    rad, phot = labels
+    table = Table("", *(name for name, _ in columns), *(["Difference"] if extra else []))
+    rows = [
+        (f"Level ({phot})", lambda c: _fmt(c.photometric, ".4g")),
+        (f"Radiometric ({rad})", lambda c: _fmt(c.radiometric, ".4g")),
+        ("CCT (K)", lambda c: _fmt(c.cct, ".0f")),
+        ("Duv", lambda c: _fmt(c.duv, "+.4f")),
+        ("x, y", lambda c: f"{c.xy[0]:.4f}, {c.xy[1]:.4f}" if c.xy else "-"),
+        ("u', v'", lambda c: f"{c.uv_prime[0]:.4f}, {c.uv_prime[1]:.4f}" if c.uv_prime else "-"),
+        ("CRI Ra", lambda c: _fmt(c.cri_ra, ".1f")),
+        ("CRI R9 (red)", lambda c: _fmt(c.cri_r.get(9), ".1f")),
+        ("TM-30 Rf", lambda c: _fmt(c.tm30_rf, ".1f")),
+        ("TM-30 Rg", lambda c: _fmt(c.tm30_rg, ".1f")),
+        ("Centroid (nm)", lambda c: _fmt(c.centroid_nm, ".1f")),
+    ]
+    for label, get in rows:
+        table.add_row(label, *(get(c) for _, c in columns), *([extra.get(label, "")] if extra else []))
+    console.print(table)
+
+
+def _print_match(result, labels):
+    from .illuminants import describe
+
+    cmp = result.comparison
+    duv = cmp.delta_uv_prime
+    color = "green" if duv is not None and duv < 0.001 else "yellow" if duv is not None and duv < 0.005 else "red"
+    extra = {
+        "CCT (K)": _fmt(cmp.delta_cct, "+.0f"),
+        "Duv": _fmt(cmp.delta_duv, "+.4f"),
+        "u', v'": f"[{color}]Δu'v' {_fmt(duv, '.4f')}[/]",
+        f"Level ({labels[1]})": _fmt(cmp.level_ratio, ".3f", "") + " x" if cmp.level_ratio else "",
+    }
+    console.print(f"[bold]{describe(result.target_name)}[/]")
+    _print_reports([("Target", result.target), ("Output", result.output)], labels, extra)
+    rms = f"spectral RMS {_fmt(cmp.spectral_rms, '.1f')} %"
+    if result.unit_rms_error == result.unit_rms_error:  # not NaN
+        rms += f" (RS-7 RPE {result.unit_rms_error:.2f} %)"
+    console.print(rms + ";  Δu'v' < 0.001 is about one just-noticeable color step")
+
+
+def _write_pair_csv(path: Path, target, output):
+    t, o = dict(target), dict(output)
+    with path.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["nm", "target", "output"])
+        for nm in sorted(set(t) | set(o)):
+            w.writerow([nm, t.get(nm, ""), o.get(nm, "")])
+    console.print(f"wrote {path}")
 
 
 # ---- spectra, presets, raw ------------------------------------------------------------------------

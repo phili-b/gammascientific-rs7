@@ -6,7 +6,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from ..spectrum import SPECTRAL_LOCUS, wavelength_to_rgb
+from ..spectrum import SPECTRAL_LOCUS, cct_to_xy, wavelength_to_rgb
 
 Series = list[tuple[float, float]]
 
@@ -83,13 +83,19 @@ class CieChart(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setFixedSize(320, 360)
+        self.setFixedSize(290, 320)
         self.xy: tuple[float, float] | None = None
+        self.target: tuple[float, float] | None = None
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setToolTip("Click to change the color of the output")
 
     def set_xy(self, xy: tuple[float, float] | None):
         self.xy = xy
+        self.update()
+
+    def set_target(self, xy: tuple[float, float] | None):
+        """Mark the target's chromaticity (blue cross); ``None`` hides it."""
+        self.target = xy
         self.update()
 
     def _to_px(self, x: float, y: float) -> QPointF:
@@ -118,6 +124,20 @@ class CieChart(QWidget):
                 dx = -26 if x < 0.3 and pos.x() > 34 else 6
                 p.setPen(wavelength_color(nm).darker(130))
                 p.drawText(QRectF(pos.x() + dx, pos.y() - 7, 22, 14), Qt.AlignmentFlag.AlignCenter, str(nm))
+        # Planckian (black-body) locus with a few temperatures
+        temps = [1667 * (25000 / 1667) ** (i / 60) for i in range(61)]
+        p.setPen(QPen(QColor("#555555"), 1))
+        p.drawPolyline(QPolygonF([self._to_px(*cct_to_xy(t)) for t in temps]))
+        p.setPen(QColor("#333333"))
+        for t, label in ((2000, "2000K"), (3000, "3000"), (4000, "4000"), (6500, "6500"), (10000, "10k")):
+            pos = self._to_px(*cct_to_xy(t))
+            p.drawLine(pos + QPointF(0, -3), pos + QPointF(0, 3))
+            p.drawText(QRectF(pos.x() - 18, pos.y() + 3, 36, 12), Qt.AlignmentFlag.AlignCenter, label)
+        if self.target:
+            t = self._to_px(*self.target)
+            p.setPen(QPen(QColor("#2060ff"), 2))
+            p.drawLine(t + QPointF(-6, -6), t + QPointF(6, 6))
+            p.drawLine(t + QPointF(-6, 6), t + QPointF(6, -6))
         if self.xy:
             p.setPen(QPen(QColor("black"), 2))
             p.setBrush(Qt.BrushStyle.NoBrush)

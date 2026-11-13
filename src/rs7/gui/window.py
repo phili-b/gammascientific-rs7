@@ -7,7 +7,6 @@ values are read before a job is queued, and results are shown when it comes back
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, Qt, QTimer
@@ -33,14 +32,16 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSpinBox,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 from serial.tools import list_ports
 
+from ..colorimetry import ColorReport, analyze, compare
 from ..device import FTDI_IDS, RS7, ChannelInfo, PeakType, RS7Error, Units
-from ..spectrum import blackbody, cct_to_xy, load_csv, resample
+from ..illuminants import available, describe, target_spectrum
+from ..match import ANALYSIS_RANGE, MatchResult, match, scale_to_level
+from ..spectrum import cct_to_xy
 from .widgets import CieChart, SpectrumPlot, wavelength_color
 from .worker import Worker
 
@@ -49,8 +50,19 @@ STEPS = 100  # slider steps per percent (0.01 % resolution)
 RED = "background: #ff6060;"
 
 
-def read_state(r: RS7, start: int, end: int, channels: list[int], plot_all: bool, sliders: bool) -> dict:
-    """Everything the window shows, read from the unit (worker thread). Leaves the units on INTERNAL."""
+def read_state(
+    r: RS7,
+    start: int,
+    end: int,
+    channels: list[int],
+    plot_all: bool,
+    sliders: bool,
+    target: tuple[str, int, int] | None = None,
+) -> dict:
+    """Everything the window shows, read from the unit and analyzed (worker thread). Leaves the units on INTERNAL.
+
+    ``target`` = (name, start, end): also build that target at the output's level and compare.
+    """
     st: dict[str, Any] = {}
     if sliders:
         st["powers"] = r.channel_powers()
@@ -65,9 +77,24 @@ def read_state(r: RS7, start: int, end: int, channels: list[int], plot_all: bool
             st[key] = read()
         except RS7Error:  # no spectrum (all channels off)
             st[key] = None
+    lo, hi = min(start, ANALYSIS_RANGE[0]), max(end, ANALYSIS_RANGE[1])
+    full = r.spectrum(0, lo, hi)  # one read serves the plot and the analysis
+    st["spec"] = [(nm, v) for nm, v in full if start <= nm <= end]
+    analysis_spec = [(nm, v) for nm, v in full if ANALYSIS_RANGE[0] <= nm <= ANALYSIS_RANGE[1]]
+    report = st["report"] = analyze(analysis_spec)
+    st["chan_specs"] = {c: r.spectrum(c, start, end) for c in channels} if plot_all else {}
     r.set_wavelength_range(start, end)
-    st["spec"] = r.spectrum()
-    st["chan_specs"] = {c: r.spectrum(c) for c in channels} if plot_all else {}
+    if target:
+        name, t_start, t_end = target
+        try:
+            relative = target_spectrum(name, t_start, t_end)
+            level = report.photometric if report.photometric > 0 else 1.0
+            scale = scale_to_level(relative, t_start, level, Units.PHOTOMETRIC)
+            t_spec = [(t_start + i, v * scale) for i, v in enumerate(relative)]
+            t_report = analyze(t_spec)
+            st["target"] = (t_spec, t_report, compare(report, t_report, analysis_spec, t_spec))
+        except ValueError as e:
+            st["target_error"] = str(e)
     return st
 
 
@@ -123,7 +150,8 @@ class MainWindow(QMainWindow):
         self.rel_peak = 1.0
         self.spec: list[tuple[int, float]] = []
         self.chan_specs: dict[int, list[tuple[int, float]]] = {}
-        self.base: list[tuple[float, float]] = [(0.0, 1.0), (5000.0, 1.0)]  # base target: unity
+        self.target_spec: list[tuple[int, float]] = []
+        self.phot_unit = "cd/m2"
         self.xy: tuple[float, float] | None = None
 
         self.flush_timer = QTimer(self)
@@ -176,10 +204,11 @@ class MainWindow(QMainWindow):
             self.out_labels[key] = QLabel(label)
             form.addRow(self.out_labels[key], e)
         left.addWidget(out)
+        left.addWidget(self._build_quality_pane())
         left.addWidget(QLabel("Main power"), alignment=Qt.AlignmentFlag.AlignHCenter)
         self.main = QSlider(Qt.Orientation.Vertical)
         self.main.setRange(0, 100 * STEPS)
-        self.main.setMinimumHeight(250)
+        self.main.setMinimumHeight(150)
         self.main.setToolTip("Scale the whole spectrum; hold Shift to keep the color")
         self.main.actionTriggered.connect(lambda _a: self._main_moved(self.main.sliderPosition() / STEPS))
         left.addWidget(self.main, 1, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -246,12 +275,12 @@ class MainWindow(QMainWindow):
         row.addWidget(delete)
         pl.addLayout(row)
         right.addWidget(presets)
-        self.stack = QStackedWidget()
         self.chart = CieChart()
         self.chart.clicked.connect(lambda x, y: self._run(lambda r: r.set_chromaticity(x, y)))
-        self.stack.addWidget(self.chart)
-        self.stack.addWidget(self._build_target_pane())
-        right.addWidget(self.stack)
+        right.addWidget(self.chart, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.target_pane = self._build_target_pane()
+        self.target_pane.setVisible(False)
+        right.addWidget(self.target_pane)
         right.addStretch()
         grid.addLayout(right, 0, 2)
 
@@ -272,17 +301,35 @@ class MainWindow(QMainWindow):
     def _build_target_pane(self) -> QWidget:
         box = QGroupBox("Target Spectrum")
         f = QFormLayout(box)
-        load = QPushButton("Load CSV...")
+        self.target_box = QComboBox()
+        self.target_box.setEditable(True)
+        self.target_box.addItems(available())
+        self.target_box.setCurrentText("D65")
+        self.target_box.setToolTip(
+            "CIE illuminant (D65, A, FL2, LED-B3, ...), D<CCT> for daylight (D5000), <T>K for a black body (3000K), "
+            "or a CSV file (nm, value)"
+        )
+        self.target_box.activated.connect(lambda _i: self._run(sliders=False))
+        line_edit = self.target_box.lineEdit()
+        if line_edit:
+            line_edit.returnPressed.connect(lambda: self._run(sliders=False))
+        load = QPushButton("CSV...")
+        load.setToolTip("Load a target spectrum: one 'wavelength, value' per line, any step size")
         load.clicked.connect(self._load_csv)
-        self.base_name = QLabel("none / unity")
-        f.addRow(load, self.base_name)
-        self.bb = QLineEdit()
-        self.bb.setPlaceholderText("e.g. 3000")
-        self.bb.returnPressed.connect(self._blackbody)
-        f.addRow("Black body CCT (K)", self.bb)
-        self.scale = QLineEdit("1.0")
-        self.scale.returnPressed.connect(self._draw_plot)
-        f.addRow("Scale factor", self.scale)
+        row = QHBoxLayout()
+        row.addWidget(self.target_box, 1)
+        row.addWidget(load)
+        f.addRow("Target", row)
+        self.level = QLineEdit()
+        self.level.setPlaceholderText("keep present level")
+        self.level_units = QComboBox()
+        self.level_units.addItems(["photometric", "radiometric"])
+        row = QHBoxLayout()
+        row.addWidget(self.level, 1)
+        row.addWidget(self.level_units)
+        f.addRow("Level", row)
+        self.at_max = QCheckBox("As bright as possible (soft limit)")
+        f.addRow(self.at_max)
         self.fit_start, self.fit_end = QSpinBox(), QSpinBox()
         for sb, v in ((self.fit_start, 380), (self.fit_end, 780)):
             sb.setRange(360, 1100)
@@ -295,12 +342,33 @@ class MainWindow(QMainWindow):
         self.correct = QCheckBox("Correct chromaticity after fit")
         self.correct.setChecked(True)
         f.addRow(self.correct)
-        fit, fit_max = QPushButton("Fit To Target"), QPushButton("Fit At Max")
-        fit.clicked.connect(lambda: self._fit(False))
-        fit_max.clicked.connect(lambda: self._fit(True))
-        f.addRow(fit, fit_max)
-        self.rms = QLabel("")
-        f.addRow(self.rms)
+        button = QPushButton("Match")
+        button.setToolTip("Fit the channels to the target, correct the color and set the level")
+        button.clicked.connect(self._match)
+        f.addRow(button)
+        self.match_result = QLabel("")
+        self.match_result.setWordWrap(True)
+        f.addRow(self.match_result)
+        return box
+
+    def _build_quality_pane(self) -> QWidget:
+        box = QGroupBox("Color quality")
+        f = QFormLayout(box)
+        self.quality: dict[str, QLabel] = {}
+        for key, label in [
+            ("level", "Level"),
+            ("cct", "CCT / Duv"),
+            ("uv", "u', v'"),
+            ("cri", "CRI Ra / R9"),
+            ("tm30", "TM-30 Rf / Rg"),
+            ("target", "Target"),
+            ("delta", "\u0394u'v' to target"),
+            ("rms", "Spectral RMS"),
+        ]:
+            self.quality[key] = QLabel("-")
+            f.addRow(label, self.quality[key])
+        self.quality["delta"].setToolTip("Chromaticity difference; 0.001 is about one just-noticeable step")
+        self.quality["rms"].setToolTip("RMS difference of the area-normalized spectra over the fit range, % of mean")
         return box
 
     def _build_menu(self):
@@ -364,6 +432,7 @@ class MainWindow(QMainWindow):
             [c.channel for c in self.channels],
             self.plot_all.isChecked(),
             sliders,
+            self._target_args(),
         )
 
         def job(r: RS7):
@@ -377,6 +446,12 @@ class MainWindow(QMainWindow):
             self._show_state(state)
 
         self._do(job, done)
+
+    def _target_args(self) -> tuple[str, int, int] | None:
+        name = self.target_box.currentText().strip()
+        if not self.target_action.isChecked() or not name:
+            return None
+        return name, self.fit_start.value(), self.fit_end.value()
 
     def _error(self, e: Exception):
         self._flash(str(e) or type(e).__name__)
@@ -444,6 +519,7 @@ class MainWindow(QMainWindow):
             self.feedback.setChecked(feedback)
             self.out_labels["rad"].setText("Irradiance" if irradiant else "Radiance")
             self.out_labels["lum"].setText("Illuminance" if irradiant else "Luminance")
+            self.phot_unit = "lux" if irradiant else "cd/m2"
             self.settings.setValue("port", port)
             self.setWindowTitle(f"RS-7 Control - {port}")
             self._build_sliders()
@@ -566,8 +642,38 @@ class MainWindow(QMainWindow):
         self.spec, self.chan_specs = st["spec"], st["chan_specs"]
         total = sum(v for _, v in self.spec)
         self.entries["centroid"].setText(f"{sum(n * v for n, v in self.spec) / total:.1f}" if total > 0 else "")
+        self._show_quality(st)
         self.chart.set_xy(self.xy)
         self._draw_plot()
+
+    def _show_quality(self, st: dict):
+        rep: ColorReport = st["report"]
+        q = self.quality
+
+        def fmt(v, spec):
+            return "-" if v is None else format(v, spec)
+
+        q["level"].setText(f"{rep.photometric:.4g} {self.phot_unit}")
+        q["cct"].setText(f"{fmt(rep.cct, '.0f')} K / {fmt(rep.duv, '+.4f')}")
+        q["uv"].setText(f"{rep.uv_prime[0]:.4f}, {rep.uv_prime[1]:.4f}" if rep.uv_prime else "-")
+        q["cri"].setText(f"{fmt(rep.cri_ra, '.1f')} / {fmt(rep.cri_r.get(9), '.1f')}")
+        q["cri"].setToolTip("  ".join(f"R{i} {v:.0f}" for i, v in sorted(rep.cri_r.items())))
+        q["tm30"].setText(f"{fmt(rep.tm30_rf, '.1f')} / {fmt(rep.tm30_rg, '.1f')}")
+        self.target_spec = []
+        self.chart.set_target(None)
+        if "target" in st:
+            self.target_spec, t_rep, cmp = st["target"]
+            name = self.target_box.currentText().strip()
+            q["target"].setText(f"{describe(name)}: {fmt(t_rep.cct, '.0f')} K, Ra {fmt(t_rep.cri_ra, '.0f')}")
+            delta = cmp.delta_uv_prime
+            color = "" if delta is None else "#2a2" if delta < 0.001 else "#c80" if delta < 0.005 else "#d33"
+            q["delta"].setText(f"<b style='color:{color}'>{fmt(delta, '.4f')}</b>")
+            q["rms"].setText(f"{fmt(cmp.spectral_rms, '.1f')} %")
+            self.chart.set_target(t_rep.xy)
+        else:
+            q["target"].setText(st.get("target_error", "-"))
+            q["delta"].setText("-")
+            q["rms"].setText("-")
 
     def _entry(self, key: str):
         shift = shift_held()
@@ -596,14 +702,7 @@ class MainWindow(QMainWindow):
         channels = [(s, colors.get(ch, QColor("red"))) for ch, s in self.chan_specs.items()]
         target: list[tuple[float, float]] = []
         if self.target_action.isChecked():
-            try:
-                scale = float(self.scale.text())
-                target = [
-                    (nm, v * scale)
-                    for nm, v in zip(range(start, end + 1), resample(self.base, start, end), strict=True)
-                ]
-            except ValueError:
-                pass
+            target = [(float(nm), v) for nm, v in self.target_spec if start <= nm <= end]
         self.plot.set_data(
             start,
             end,
@@ -649,49 +748,40 @@ class MainWindow(QMainWindow):
     # ---- target spectrum ---------------------------------------------------------------------------------------
 
     def _toggle_target(self, on: bool):
-        self.stack.setCurrentIndex(1 if on else 0)
-        self._draw_plot()
+        self.target_pane.setVisible(on)
+        self._run(sliders=False)
 
     def _load_csv(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Base target spectrum", "", "CSV (*.csv *.txt);;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Target spectrum", "", "CSV (*.csv *.txt);;All files (*)")
         if path:
-            try:
-                self.base = load_csv(path)
-            except OSError as e:
-                self._error(e)
-                return
-            self.base_name.setText(Path(path).name)
-            self._draw_plot()
+            self.target_box.setCurrentText(path)
+            self._run(sliders=False)
 
-    def _blackbody(self):
+    def _match(self):
+        name = self.target_box.currentText().strip()
+        text = self.level.text().strip()
         try:
-            cct = float(self.bb.text())
+            level = float(text) if text else None
         except ValueError:
-            self._flash("Not a number")
+            self._flash("Level must be a number (or empty to keep the present level)")
             return
-        start, end = 360, 1100
-        self.base = [(float(nm), v) for nm, v in zip(range(start, end + 1), blackbody(cct, start, end), strict=True)]
-        self.base_name.setText(f"black body {cct:g} K")
-        self._draw_plot()
-
-    def _fit(self, at_max: bool):
+        units = Units.PHOTOMETRIC if self.level_units.currentIndex() == 0 else Units.RADIOMETRIC
+        at_max, white, correct = self.at_max.isChecked(), self.include_white.isChecked(), self.correct.isChecked()
         start, end = self.fit_start.value(), self.fit_end.value()
-        try:
-            target = [v * float(self.scale.text()) for v in resample(self.base, start, end)]
-        except ValueError:
-            self._flash("Scale factor must be a number")
-            return
-        white, correct = self.include_white.isChecked(), self.correct.isChecked()
 
-        def fit(r: RS7):
-            r.set_wavelength_range(start, end)
-            r.set_target_spectrum(target)
-            r.fit(include_white=white, at_max=at_max)
-            if correct:
-                r.color_correct()
-            return r.rms_error()
+        def run(r: RS7) -> MatchResult:
+            return match(r, name, level, units, at_max, start, end, white, correct)
 
-        self._run(fit, then=lambda rms: self.rms.setText(f"RMS error: {rms:.3f} %"))
+        self.match_result.setText("matching...")
+        self._run(run, then=self._show_match)
+
+    def _show_match(self, res: MatchResult):
+        c = res.comparison
+        delta = "-" if c.delta_uv_prime is None else f"{c.delta_uv_prime:.4f}"
+        self.match_result.setText(
+            f"Matched {describe(res.target_name)} at {res.output.photometric:.4g} {self.phot_unit}: "
+            f"\u0394u'v' {delta}, RS-7 spectral error {res.unit_rms_error:.1f} %"
+        )
 
     # ---- settings -------------------------------------------------------------------------------------------------
 

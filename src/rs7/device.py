@@ -314,12 +314,16 @@ class RS7:
     def set_wavelength_range(self, start: int, end: int) -> None:
         self.command(f"WLR {int(start)},{int(end)}")
 
-    def spectrum(self, channel: int = 0) -> list[tuple[int, float]]:
-        """Output spectrum as ``(nm, value)`` pairs at 1 nm steps over the wavelength range.
+    def spectrum(self, channel: int = 0, start: int | None = None, end: int | None = None) -> list[tuple[int, float]]:
+        """Output spectrum as ``(nm, value)`` pairs at 1 nm steps, in uW/cm2/nm (or uW/cm2/sr/nm).
 
-        ``channel=0`` is the combined output, otherwise the spectrum of one channel.
+        ``channel=0`` is the combined output, otherwise the spectrum of one channel. ``start``/``end`` set the
+        wavelength range first (this changes the unit's range, ``WLR``); otherwise the present range is used.
         """
-        start, _ = self.wavelength_range()
+        if start is not None and end is not None:
+            self.set_wavelength_range(start, end)
+        else:
+            start, _ = self.wavelength_range()
         self.command("STM 1")
         lines = self.command(f"OSP {channel}", multiline=True)
         return [(start + i, float(v)) for i, v in enumerate(lines)]

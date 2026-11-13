@@ -105,24 +105,77 @@ rs7 color 0.3127 0.3290
 rs7 color --cct 4000
 ```
 
-### fit
+### illuminants
 
-Fit the output to a target spectrum. `SOURCE` is a black-body temperature in K or the name of a CSV file
-with `wavelength, value` lines (any step size, interpolated to 1 nm). Prints the RMS error and the resulting
-color.
+List the target spectra that `match` and `measure` accept: the CIE illuminant library with each one's CCT, Duv,
+xy and CRI Ra, computed from its spectrum. Does not talk to the unit. Besides the listed names, a target can be
+`D<CCT>` (CIE daylight at 4000 to 25000 K, e.g. `D5000`), `<T>K` or `BB<T>` (black body, e.g. `3000K`) or the
+name of a CSV file. See [Spectral matching and color quality](colorimetry.md#targets).
+
+```
+rs7 illuminants
+```
+
+### match
+
+Make the RS-7 reproduce a target spectrum at an absolute level, and report how well it did. `TARGET` is a name
+from `rs7 illuminants`, `D<CCT>`, `<T>K`, or a CSV file with `wavelength, value` lines (any step size,
+interpolated to 1 nm). The steps (target, scale to level, fit, color correction, set level) are described in
+[How `match` works](colorimetry.md#how-match-works).
 
 | Option | Description |
 |---|---|
+| `--level`, `-l` | Total output to reach. Default: keep the present level (the maximum if the unit is off). |
+| `--units`, `-u` | Units of `--level`: `photometric` (default; lux or cd/m2) or `radiometric`. |
+| `--max` | As bright as the soft limit allows (`--level` is ignored). |
 | `--start`, `--end` | Fit range in nm (default 380 to 780). |
-| `--scale` | Multiply the target by this factor (default 1). |
-| `--max` | Fit at the highest output the soft limit allows. |
-| `--white` | Include the white channels in the fit. |
-| `--no-correct` | Do not correct the chromaticity after the fit (it is corrected by default). |
+| `--white` | Also use the white channels in the fit. |
+| `--no-correct` | Do not correct the color after the fit (it is corrected by default). |
+| `--csv FILE` | Write `nm, target, output` lines to this file. |
 
 ```
-rs7 fit 3000
-rs7 fit 6500 --max --start 400 --end 700
-rs7 fit target.csv --scale 0.5 --no-correct
+rs7 match D65 --level 500
+rs7 match A --max
+rs7 match D5000 --level 200 --start 400 --end 700
+rs7 match 3000K --level 50 --units radiometric
+rs7 match LED-B3 --level 300 --no-correct
+rs7 match target.csv --csv result.csv
+```
+
+The output is a table with a Target, an Output and a Difference column, then a line with the spectral RMS and
+the RS-7's own error (RPE). The rows are: level, radiometric power, CCT, Duv, x y, u' v', CRI Ra, CRI R9,
+TM-30 Rf and Rg, and the centroid wavelength. The Δu'v' is green below 0.001, yellow below 0.005 and red above.
+
+Values of one run on a unit with a radiant calibration (levels in cd/m2), `rs7 match D65 --level 500`:
+
+| | Target (D65, 380-780 nm) | Output | Difference |
+|---|---|---|---|
+| Level (cd/m2) | 500 | 500 | 1.000 x |
+| Radiometric (uW/cm2/sr) | 244.1 | 236.8 | |
+| CCT (K) | 6502 | 6491 | -11 |
+| Duv | +0.0032 | +0.0030 | -0.0002 |
+| x, y | 0.3127, 0.3291 | 0.3130, 0.3288 | |
+| u', v' | 0.1978, 0.4684 | 0.1981, 0.4683 | Δu'v' 0.0003 |
+| CRI Ra | 100.0 | 96.9 | |
+| CRI R9 (red) | 100.0 | 84.5 | |
+| TM-30 Rf | 100.0 | 97.0 | |
+| TM-30 Rg | 100.0 | 99.9 | |
+| Centroid (nm) | 566.0 | 564.7 | |
+
+followed by `spectral RMS 18.7 % (RS-7 RPE 18.31 %)`. More measured examples are in [Validation](colorimetry.md#validation).
+
+### measure
+
+Report the color quality of the present output: level, radiometric power, CCT, Duv, xy, u'v', CRI Ra and R9,
+TM-30 Rf and Rg, and the centroid wavelength. With `--target` / `-t NAME` the report also shows that target
+at the same level and the differences (and the spectral RMS), without the RPE since no target is loaded in the
+unit. It changes nothing on the unit.
+`--start` and `--end` set the range of the comparison (default 380 to 780).
+
+```
+rs7 measure
+rs7 measure --target D65
+rs7 measure -t 3000K --start 400 --end 700
 ```
 
 ### spectrum
