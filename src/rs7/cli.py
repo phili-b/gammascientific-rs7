@@ -15,6 +15,8 @@ from rich.table import Table
 from serial.tools import list_ports
 
 from . import __version__
+from .camera import DEFAULT_URL as DEFAULT_CAMERA
+from .chart import CHART_FILE
 from .device import FTDI_IDS, RS7, PortNotFoundError, RS7Error, Units
 from .spectrum import cct_to_xy
 
@@ -639,6 +641,165 @@ def restore(path: Annotated[Path, typer.Argument(help="JSON file written by `rs7
     with connect() as r:
         do_restore(r, snap)
     console.print(f"restored {path} ({snap.time}{', ' + snap.note if snap.note else ''})")
+
+
+# ---- camera and color accuracy -----------------------------------------------------------------------------
+
+CameraOption = Annotated[
+    str, typer.Option("--camera", envvar="RS7_CAMERA", help="URL of the camera service (picam-web).")
+]
+
+
+@contextmanager
+def camera(url: str):
+    """The camera client, turning a connection problem into a clean message and exit code."""
+    from .camera import CameraError, PicamWeb
+
+    try:
+        yield PicamWeb(url)
+    except CameraError as e:
+        err.print(f"[red]Camera error:[/] {e}")
+        raise typer.Exit(2) from e
+
+
+@app.command("camera")
+def camera_info(url: CameraOption = DEFAULT_CAMERA):
+    """Show the camera and its present settings (changes nothing)."""
+    with camera(url) as cam:
+        info, meta, controls = cam.info(), cam.metadata(), cam.controls()
+    mode = info["sensor_modes"][info["mode"]]
+    black = meta["SensorBlackLevels"][0] * 2 ** (mode["bit_depth"] - 16)
+    table = Table(show_header=False, box=None)
+    table.add_row("Camera", f"{info['properties']['Model']} ({info['sensor']})")
+    table.add_row("Mode", f"{mode['size'][0]} x {mode['size'][1]}, {mode['bit_depth']} bit, {mode['format']}")
+    table.add_row("Auto exposure", "on" if controls.get("AeEnable") else "off")
+    table.add_row("Exposure", f"{meta['ExposureTime'] / 1000:.3f} ms")
+    table.add_row("Analogue gain", f"{meta['AnalogueGain']:.3f}")
+    table.add_row("Black level", f"{black:g} DN of {2 ** mode['bit_depth'] - 1}")
+    console.print(table)
+
+
+def _patch_table(data, title: str) -> Table:
+    from .colorcheck import PATCH_NAMES
+
+    table = Table("#", "Patch", "R", "G", "B", "Peak", "", title=title)
+    for i, name in enumerate(PATCH_NAMES):
+        note = "[red]saturated[/]" if data.saturated[i] else "[yellow]too dark[/]" if data.too_dark[i] else ""
+        table.add_row(str(i + 1), name, *(f"{v:.1f}" for v in data.rgb[i]), f"{data.peak[i]:.0f}", note)
+    return table
+
+
+@app.command()
+def chart(
+    corners: Annotated[
+        str | None,
+        typer.Option(help="Centers of the corner patches in raw pixels: 'x1,y1 x2,y2 x3,y3 x4,y4' (TL TR BR BL)."),
+    ] = None,
+    png: Annotated[Path, typer.Option(help="Write the image with the measured squares to this PNG file.")] = Path(
+        "chart.png"
+    ),
+    url: CameraOption = DEFAULT_CAMERA,
+):
+    """Check where the ColorChecker is: one raw image at the present camera settings (changes nothing)."""
+    from .chart import ChartGeometry, parse_corners, preview_png
+    from .colorcheck import measure_patches
+
+    geometry = ChartGeometry.load()
+    if corners:
+        try:
+            geometry = ChartGeometry(parse_corners(corners))
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
+        geometry.save()
+        console.print(f"saved the chart position to {CHART_FILE}")
+    with camera(url) as cam:
+        capture = cam.capture()
+    preview_png(capture, geometry, png)
+    console.print(f"wrote {png}")
+    data = measure_patches(capture, geometry)
+    title = f"Mean raw values (DN, black level {capture.black_level:g} subtracted), {capture.exposure_us / 1000:.1f} ms"
+    console.print(_patch_table(data, title))
+
+
+@app.command()
+def colorcheck(
+    illuminants: Annotated[str, typer.Option(help="Comma-separated lights to make (see `rs7 illuminants`).")] = (
+        "D65,A,LED-B3"
+    ),
+    level: Annotated[
+        float | None, typer.Option("--level", "-l", help="Light level in lux; default: keep the present level.")
+    ] = None,
+    frames: Annotated[int, typer.Option(help="Raw frames to average per light.")] = 4,
+    method: Annotated[
+        Method, typer.Option("--method", "-m", help="How the RS-7 is fitted to each light.")
+    ] = Method.local,
+    out: Annotated[Path | None, typer.Option("--csv", help="Write the ΔE of every patch to this CSV file.")] = None,
+    url: CameraOption = DEFAULT_CAMERA,
+):
+    """Color accuracy of the camera under the RS-7's light, from a ColorChecker (changes the light, restores it)."""
+    from .chart import ChartGeometry
+    from .colorcheck import PATCH_NAMES, color_accuracy
+
+    names = [n.strip() for n in illuminants.split(",") if n.strip()]
+    if not names:
+        raise typer.BadParameter("give at least one illuminant")
+    with connect() as r, camera(url) as cam:
+        try:
+            result = color_accuracy(
+                r,
+                cam,
+                ChartGeometry.load(),
+                names,
+                level,
+                frames,
+                method.value,
+                progress=lambda m: err.print(f"[dim]{m}[/]"),
+            )
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
+
+    summary = Table("Light", "CCT (K)", "Δu'v' of the light", "Exposure (ms)", "Mean ΔE", "Median ΔE", "Max ΔE")
+    for res in result.illuminants:
+        a = res.accuracy
+        summary.add_row(
+            res.illuminant,
+            _fmt(res.cct, ".0f"),
+            _fmt(res.delta_uv_prime, ".4f"),
+            f"{res.exposure_us / 1000:.1f}",
+            f"{a.mean:.2f}",
+            f"{a.median:.2f}",
+            f"{a.max:.2f}",
+        )
+    console.print(summary)
+
+    table = Table("#", "Patch", *(res.illuminant for res in result.illuminants), title="ΔE2000 per patch")
+    for i, name in enumerate(PATCH_NAMES):
+        cells = []
+        for res in result.illuminants:
+            cell = f"{res.accuracy.delta_e[i]:.2f}"
+            cells.append(cell if res.accuracy.used[i] else f"[dim]{cell} (excluded)[/]")
+        table.add_row(str(i + 1), name, *cells)
+    console.print(table)
+
+    if result.cross:
+        first = result.cross[0].fitted_under
+        cross = Table("Light", "Mean ΔE", "Median ΔE", "Max ΔE", title=f"Matrix fitted under {first}, white-balanced")
+        for c in result.cross:
+            cross.add_row(c.illuminant, f"{c.accuracy.mean:.2f}", f"{c.accuracy.median:.2f}", f"{c.accuracy.max:.2f}")
+        console.print(cross)
+    console.print("ΔE2000 below 1 is hardly visible; 2-3 is a small difference to a trained eye.")
+
+    if out:
+        rows = []
+        for i, name in enumerate(PATCH_NAMES):
+            row = {"patch": i + 1, "name": name}
+            for res in result.illuminants:
+                row[res.illuminant] = round(float(res.accuracy.delta_e[i]), 3)
+                row[f"{res.illuminant} used"] = bool(res.accuracy.used[i])
+            for c in result.cross:
+                row[f"{c.illuminant} (matrix from {c.fitted_under})"] = round(float(c.accuracy.delta_e[i]), 3)
+            rows.append(row)
+        _write_rows(out, rows)
 
 
 # ---- bridge and GUI --------------------------------------------------------------------------------
