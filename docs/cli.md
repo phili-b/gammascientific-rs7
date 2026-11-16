@@ -135,7 +135,7 @@ RS-7's own fit (`FTS`) instead. Measurements of both are in
 | `--method`, `-m` | `local` (default): solve the channel powers on the PC. `firmware`: the RS-7's own fit. |
 | `--max` | As bright as the soft limit allows (`--level` is ignored). With `local` the target is scaled until a channel reaches the limit, keeping the spectral shape; the firmware is brighter but less faithful. |
 | `--start`, `--end` | Fit range in nm (default 380 to 780). |
-| `--white` | Also use the white channels in the fit (`--method firmware` only). |
+| `--white` / `--no-white` | Use the white channels in the fit (default: on; `--method firmware` only, the local fit always uses every channel). |
 | `--no-correct` | Do not correct the color after the fit (it is corrected by default). |
 | `--csv FILE` | Write `nm, target, output` lines to this file. |
 

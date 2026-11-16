@@ -251,7 +251,9 @@ def match(
     at_max: Annotated[bool, typer.Option("--max", help="As bright as the soft limit allows.")] = False,
     start: Annotated[int, typer.Option(help="Fit range start (nm).")] = 380,
     end: Annotated[int, typer.Option(help="Fit range end (nm).")] = 780,
-    white: Annotated[bool, typer.Option("--white", help="Also use the white channels.")] = False,
+    white: Annotated[
+        bool, typer.Option("--white/--no-white", help="Use the white channels (--method firmware only).")
+    ] = True,
     correct: Annotated[bool, typer.Option(help="Correct the color exactly after the spectral fit.")] = True,
     out: Annotated[Path | None, typer.Option("--csv", help="Write nm, target, output to this CSV file.")] = None,
     method: Annotated[

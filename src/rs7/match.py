@@ -43,7 +43,7 @@ def match(
     at_max: bool = False,
     start: int = 380,
     end: int = 780,
-    include_white: bool = False,
+    include_white: bool = True,
     correct_chromaticity: bool = True,
     method: str = "local",
 ) -> MatchResult:

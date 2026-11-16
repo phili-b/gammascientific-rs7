@@ -284,7 +284,7 @@ class MainWindow(QMainWindow):
         self.chart.clicked.connect(lambda x, y: self._run(lambda r: r.set_chromaticity(x, y)))
         right.addWidget(self.chart, alignment=Qt.AlignmentFlag.AlignHCenter)
         self.target_pane = self._build_target_pane()
-        self.target_pane.setVisible(False)
+        self.target_pane.setVisible(True)  # shown by default; View > Target Spectrum hides it
         right.addWidget(self.target_pane)
         right.addStretch()
         grid.addLayout(right, 0, 2)
@@ -416,7 +416,7 @@ class MainWindow(QMainWindow):
             a.triggered.connect(lambda _c, t=pt: self._do(lambda r: r.set_peak_type(t)))
             self.peak_group.addAction(a)
             peak.addAction(a)
-        self.include_white = QAction("Include White Channels in Spectral Fit", self, checkable=True)
+        self.include_white = QAction("Include White Channels in Spectral Fit", self, checkable=True, checked=True)
         settings.addAction(self.include_white)
         settings.addAction("Working Distance (mm)...", self._ask_distance)
         self.feedback = QAction("Enable Optical Feedback", self, checkable=True, checked=True)
@@ -426,7 +426,7 @@ class MainWindow(QMainWindow):
         settings.addAction("Quit", QKeySequence.StandardKey.Quit, self.close)
 
         view = self.menuBar().addMenu("&View")
-        self.target_action = QAction("Target Spectrum", self, checkable=True)
+        self.target_action = QAction("Target Spectrum", self, checkable=True, checked=True)
         self.target_action.toggled.connect(self._toggle_target)
         view.addAction(self.target_action)
 

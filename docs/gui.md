@@ -50,7 +50,7 @@ gone when the window closes. Only the part inside the plotted range is drawn.
 - **Select COM Port**: connect; the port is remembered (Qt `QSettings`) and reused at the next start. If none is stored, the first RS-7 found is used.
 - **Network Address**: connect to a port shared with `rs7 bridge` (`socket://host:5000`).
 - **Standard Observer** (2 or 10 degrees), **Peak Type**, **Optical Feedback**, **Working Distance**.
-- **Include White Channels in Spectral Fit**.
+- **Include White Channels in Spectral Fit** (on by default).
 
 ## Color quality
 
@@ -72,7 +72,7 @@ The values are computed on the PC from the spectrum the unit reports over 360-83
 
 ## Target spectrum (View > Target Spectrum)
 
-Shows the target pane under the CIE chart. The target is drawn in blue on the spectral plot, scaled to the level
+Shown by default (untick it to hide it): the target pane under the CIE chart. The target is drawn in blue on the spectral plot, scaled to the level
 of the output, and as a blue cross on the CIE chart. The Color quality panel then compares the output with it.
 
 | Control | What it does |
@@ -85,7 +85,7 @@ of the output, and as a blue cross on the CIE chart. The Color quality panel the
 | Correct chromaticity after fit | After the fit, correct the color to the target's exactly (on by default). Costs a little spectral match; see [Why correct_chromaticity](colorimetry.md#why-correct_chromaticity-is-on-by-default). |
 | Match | Scale the target to the level, fit the channels, set the level and correct the color. The result line below shows the target, the level reached, Δu'v' and the spectral RMS. |
 
-**Settings > Include White Channels in Spectral Fit** applies to the firmware fit only; the local optimizer uses
+**Settings > Include White Channels in Spectral Fit** (on by default) applies to the firmware fit only; the local optimizer uses
 every channel. The steps of a match are described
 under [How `match` works](colorimetry.md#how-match-works).
 

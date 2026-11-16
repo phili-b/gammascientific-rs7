@@ -130,7 +130,7 @@ print(analyze(d65).cct)  # about 6504 K
 
 | Function | Description |
 |---|---|
-| `match(rs7, target, level=None, units=Units.PHOTOMETRIC, at_max=False, start=380, end=780, include_white=False, correct_chromaticity=True, method="local")` | Scale the target to `level`, fit the unit to it, set the exact level and correct the color (`CCS`). `method="local"` (default) solves the channel powers on the PC (`rs7.optimize`); `method="firmware"` uses the RS-7's own fit (`TSP`, `FTS`). `level=None` keeps the present level; `at_max=True` fits at the highest output the soft limit allows. `include_white` applies to the firmware fit only. Returns a `MatchResult`; raises `ValueError` for another `method` |
+| `match(rs7, target, level=None, units=Units.PHOTOMETRIC, at_max=False, start=380, end=780, include_white=True, correct_chromaticity=True, method="local")` | Scale the target to `level`, fit the unit to it, set the exact level and correct the color (`CCS`). `method="local"` (default) solves the channel powers on the PC (`rs7.optimize`); `method="firmware"` uses the RS-7's own fit (`TSP`, `FTS`). `level=None` keeps the present level; `at_max=True` fits at the highest output the soft limit allows. `include_white` applies to the firmware fit only. Returns a `MatchResult`; raises `ValueError` for another `method` |
 | `measure(rs7)` | Read-only: the `ColorReport` of the present output |
 | `measure_against(rs7, target, start=380, end=780)` | Read-only: a `MatchResult` comparing the present output with `target` at the same level (its `unit_rms_error` is NaN) |
 | `scale_to_level(relative, start, level, units)` | Factor that turns a relative spectrum into absolute units with the given total level (photometric or radiometric) |
