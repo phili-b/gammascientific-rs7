@@ -20,6 +20,9 @@ rs7 = "rs7.cli:app"
 rs7-gui = "rs7.gui:main"
 
 [dependency-groups]
+build = [
+    "pyinstaller>=6.22.3",
+]
 dev = [
     "pyside6>=6.6",
     "pytest>=8",

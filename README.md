@@ -24,6 +24,15 @@ Python API, command line tool and desktop GUI for the Gamma Scientific **Spectra
 
 ## Install
 
+Download the installer for your platform from the [latest release](https://github.com/phili-b/gammascientific-rs7/releases/latest). They bundle Python, so nothing else is needed.
+
+- **Windows:** `gammascientific-rs7-<version>-windows-x64-setup.exe` (Start Menu shortcut, optional PATH entry), or the portable zip.
+- **Debian / Ubuntu / Raspberry Pi OS:** `sudo apt install ./gammascientific-rs7_<version>_<amd64|arm64>.deb`, then `rs7` and `rs7-gui`. Add yourself to the `dialout` group for serial access.
+- **Other Linux:** the `.AppImage` starts the GUI; `./gammascientific-rs7-*.AppImage cli measure` runs the command line.
+- **Python:** `pip install "gammascientific-rs7[gui]"` or `uv tool install "gammascientific-rs7[gui]"`.
+
+Or install from source:
+
 The project uses [uv](https://docs.astral.sh/uv/). CLI and GUI:
 
     uv tool install "gammascientific-rs7[gui] @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"
@@ -135,6 +144,10 @@ or `rs7 gui` or `python -m rs7.gui`. Pick a port under **Settings > Select COM P
 - [Examples](examples/)
 
 Serve the HTML docs locally with `uv run --group docs mkdocs serve`.
+
+## Releasing
+
+Bump `version` in `pyproject.toml` and `src/rs7/__init__.py`, merge, then `git tag v<version> && git push origin v<version>`. The Release workflow builds the wheel, the Windows installer, and the Linux AppImage and .deb (x86_64 and aarch64), creates the GitHub release, and publishes to PyPI.
 
 ## Development
 
