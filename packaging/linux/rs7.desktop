@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=RS-7 Control
+Comment=Control the Gamma Scientific SpectralLED RS-7 light source
+Exec=rs7-gui
+Icon=rs7
+Categories=Science;Electronics;
+Terminal=false
