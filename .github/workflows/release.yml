@@ -94,9 +94,9 @@ jobs:
       - name: Smoke test
         run: ./dist/rs7/rs7 version
       - name: AppImage
-        run: packaging/linux/build-appimage.sh "${{ needs.verify.outputs.version }}"
+        run: bash packaging/linux/build-appimage.sh "${{ needs.verify.outputs.version }}"
       - name: deb
-        run: packaging/linux/build-deb.sh "${{ needs.verify.outputs.version }}"
+        run: bash packaging/linux/build-deb.sh "${{ needs.verify.outputs.version }}"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}
