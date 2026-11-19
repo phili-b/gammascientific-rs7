@@ -1,7 +1,7 @@
 [project]
 name = "gammascientific-rs7"
 version = "0.4.0"
-description = "Python API, CLI and desktop GUI for the Gamma Scientific SpectralLED RS-7 light source"
+description = "Python API, CLI, desktop GUI and web interface for the Gamma Scientific SpectralLED RS-7 light source"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = ["pyside6>=6.6"]
+web = ["fastapi>=0.110", "uvicorn>=0.29"]
 
 [project.scripts]
 rs7 = "rs7.cli:app"
@@ -24,10 +25,13 @@ build = [
     "pyinstaller>=6.22.3",
 ]
 dev = [
+    "fastapi>=0.110",
+    "httpx>=0.27",
     "pyside6>=6.6",
     "pytest>=8",
     "ruff>=0.6",
     "ty>=0.0.1a20",
+    "uvicorn>=0.29",
 ]
 docs = [
     "mkdocs>=1.6",
