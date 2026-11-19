@@ -838,3 +838,28 @@ def gui():
         err.print(f"[red]The GUI needs PySide6:[/] install with  uv tool install 'gammascientific-rs7[gui]'  ({e})")
         raise typer.Exit(2) from e
     gui_main(state.port)
+
+
+@app.command()
+def web(
+    host: Annotated[str, typer.Option(help="Address to listen on (0.0.0.0 = every network interface).")] = "0.0.0.0",
+    port: Annotated[int, typer.Option(help="TCP port of the web page.")] = 8000,
+    device: Annotated[
+        str | None, typer.Option(help="Serial port or socket://host:5000 of the RS-7; default: the global --port.")
+    ] = None,
+):
+    """Serve a web page that controls the RS-7 (no login; trusted networks only; needs the 'web' extra)."""
+    try:
+        from .web import main as web_main
+    except ImportError as e:
+        err.print(
+            f"[red]The web interface needs FastAPI:[/] install with  uv tool install 'gammascientific-rs7[web]'  ({e})"
+        )
+        raise typer.Exit(2) from e
+    try:
+        web_main(device or state.port, host, port)
+    except KeyboardInterrupt:
+        pass
+    except (PortNotFoundError, serial.SerialException, RS7Error, OSError) as e:
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(2) from e

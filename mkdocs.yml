@@ -7,6 +7,7 @@ nav:
   - Camera color accuracy: camera.md
   - API reference: api.md
   - GUI: gui.md
+  - Web interface: web.md
   - Serial protocol: protocol.md
 theme:
   name: material

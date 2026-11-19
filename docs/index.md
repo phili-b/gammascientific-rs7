@@ -22,6 +22,8 @@ Python 3.11 or newer is needed. The project uses [uv](https://docs.astral.sh/uv/
 
 Leave out `[gui]` for the command and the Python API only (no PySide6), e.g. on a headless Raspberry Pi.
 
+Use `[web]` for the [web interface](web.md) (`rs7 web`), which needs FastAPI instead of PySide6.
+
 As a library in your own project:
 
     uv add "gammascientific-rs7 @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"

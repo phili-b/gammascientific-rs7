@@ -14,6 +14,7 @@ Python API, command line tool and desktop GUI for the Gamma Scientific **Spectra
 - `rs7` (Python): a small API over the RS-7's ASCII command set (user manual, section 4)
 - `rs7` (command): control the unit from a terminal (`rs7 set`, `rs7 match`, `rs7 spectrum`, ...)
 - `rs7-gui`: a desktop window (PySide6) laid out like the manufacturer's SpectralLED Assistant
+- `rs7 web`: the same controls in a browser (FastAPI, `web` extra), for a headless Raspberry Pi or any PC on the lab network ([docs/web.md](docs/web.md))
 - **spectral matching**: make the RS-7 reproduce a CIE illuminant (D65, A, FL2, LED-B3, ...), a CIE daylight or black body at any temperature, or a spectrum from a CSV file, at an absolute level in lux or cd/m2. By default the channel powers are solved on the PC from the measured spectrum of each channel (bounded least squares with feedback from the real output); the RS-7's own fit is available with `--method firmware`
 - **color quality**: CCT, Duv, xy, u'v', CRI (Ra, R1-R14) and TM-30 (Rf, Rg) of the output and of the target, and the difference between them, computed on the PC with [colour-science](https://www.colour-science.org/)
 - **monochromatic steps and scans**: one narrow channel at a chosen photon flux, radiant power or drive level, or a scan through all narrow channels at equal photon flux (spectral response and QE measurements)
@@ -131,6 +132,13 @@ Without `--port` / `-p` (or the `RS7_PORT` environment variable) the first RS-7 
 
 or `rs7 gui` or `python -m rs7.gui`. Pick a port under **Settings > Select COM Port**; it is remembered, and if none is stored the first RS-7 found is used. All unit communication runs on a background thread, so the window does not freeze. A **Color quality** panel shows CCT, Duv, CRI and TM-30 of the output; **View > Target Spectrum** matches a target spectrum (**Fit with** the local optimizer or the RS-7 firmware); the **File** menu saves and restores snapshots, saves the spectrum as CSV, exports the plot as PNG and adds reference spectra to the plot. See [docs/gui.md](docs/gui.md).
 
+## Web interface
+
+    rs7 web                                          # unit on this machine (first RS-7 found), http://<this machine>:8000
+    rs7 web --device socket://10.61.100.206:5000     # unit shared by `rs7 bridge` on another machine
+
+Needs the `web` extra (`uv tool install "gammascientific-rs7[web] @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"`). Channel sliders, spectrum, presets, target match and color quality in a browser, also on a phone. There is no login: use it on a trusted network only. See [docs/web.md](docs/web.md).
+
 ## Documentation
 
 - [Getting started](docs/index.md)
@@ -140,6 +148,7 @@ or `rs7 gui` or `python -m rs7.gui`. Pick a port under **Settings > Select COM P
 - [Camera color accuracy](docs/camera.md): ColorChecker, color matrix, ΔE2000
 - [API reference](docs/api.md)
 - [GUI](docs/gui.md)
+- [Web interface](docs/web.md)
 - [Serial protocol notes](docs/protocol.md)
 - [Examples](examples/)
 

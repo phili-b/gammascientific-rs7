@@ -426,6 +426,17 @@ rs7 bridge --listen 5001
 On the other machine use `socket://host:5000` as the port (`rs7 -p socket://host:5000 info`,
 `RS7("socket://host:5000")`, or **Settings > Network Address** in the GUI).
 
+### web
+
+Serve the [web interface](web.md) for the unit; needs the `web` extra (FastAPI, uvicorn). `--host` (default
+`0.0.0.0`) and `--port` (default 8000) set where the page is served; `--device` or the global `--port` selects the
+RS-7 (a serial port or `socket://host:5000`). No authentication; trusted networks only.
+
+```
+rs7 web
+rs7 web --port 8080 --device /dev/ttyUSB0
+```
+
 ### gui
 
 Open the desktop GUI; needs the `gui` extra (PySide6). With a global `--port` it connects to that port.

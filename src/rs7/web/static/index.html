@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RS-7 Control</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>RS-7 Control</h1>
+  <span id="unit" class="muted"></span>
+  <button id="alarm" class="alarm" title="Click to clear the alarm">No alarm</button>
+</header>
+
+<main>
+  <section class="card" id="output-card">
+    <h2>Output</h2>
+    <dl class="readout">
+      <div><dt>Power level</dt><dd id="r-power">-</dd><span class="unit">%</span></div>
+      <div><dt id="l-rad">Radiance</dt><dd id="r-rad">-</dd></div>
+      <div><dt id="l-lum">Luminance</dt><dd id="r-lum">-</dd><span class="unit" id="u-lum"></span></div>
+      <div><dt>CCT</dt><dd id="r-cct">-</dd><span class="unit">K</span></div>
+      <div><dt>CIE x</dt><dd id="r-x">-</dd></div>
+      <div><dt>CIE y</dt><dd id="r-y">-</dd></div>
+    </dl>
+    <label class="slider-row main">
+      <span class="name">Main power</span>
+      <input type="range" id="main" min="0" max="100" step="0.01" value="0">
+      <output id="main-value">0.00</output>
+    </label>
+    <div class="row">
+      <label><input type="checkbox" id="keep"> keep chromaticity</label>
+      <button id="all-off" class="danger">All Off</button>
+    </div>
+  </section>
+
+  <section class="card wide" id="spectrum-card">
+    <h2>Output spectrum</h2>
+    <canvas id="spectrum"></canvas>
+    <p class="muted caption" id="spectrum-caption"></p>
+    <div class="row">
+      <label>from <input type="number" id="plot-start" value="380" min="360" max="1099" step="10"> nm</label>
+      <label>to <input type="number" id="plot-end" value="780" min="361" max="1100" step="10"> nm</label>
+      <label><input type="checkbox" id="plot-all"> plot all channels</label>
+    </div>
+  </section>
+
+  <section class="card wide" id="channels-card">
+    <h2>Channels</h2>
+    <div id="channels" class="channels"></div>
+  </section>
+
+  <section class="card" id="quality-card">
+    <h2>Color quality</h2>
+    <table class="quality">
+      <tr><th>Level</th><td id="q-level">-</td></tr>
+      <tr><th>CCT / Duv</th><td id="q-cct">-</td></tr>
+      <tr><th>u', v'</th><td id="q-uv">-</td></tr>
+      <tr><th>CRI Ra / R9</th><td id="q-cri">-</td></tr>
+      <tr><th>TM-30 Rf / Rg</th><td id="q-tm30">-</td></tr>
+      <tr><th>Target</th><td id="q-target">-</td></tr>
+      <tr><th>&Delta;u'v' to target</th><td id="q-delta">-</td></tr>
+      <tr><th>Spectral RMS</th><td id="q-rms">-</td></tr>
+    </table>
+    <canvas id="cie"></canvas>
+  </section>
+
+  <section class="card" id="match-card">
+    <h2>Target match</h2>
+    <form id="match-form" class="form">
+      <label>Target
+        <input id="target" list="illuminants" value="D65" autocomplete="off" spellcheck="false"
+               title="CIE illuminant (D65, A, FL2, ...), D5000 for daylight or 3000K for a black body">
+      </label>
+      <datalist id="illuminants"></datalist>
+      <label>Level
+        <span class="inline">
+          <input id="level" type="number" min="0" step="any" placeholder="keep present level">
+          <select id="level-units"><option value="photometric">photometric</option><option value="radiometric">radiometric</option></select>
+        </span>
+      </label>
+      <label class="check"><input type="checkbox" id="at-max"> as bright as possible (soft limit)</label>
+      <label>Fit range
+        <span class="inline">
+          <input id="fit-start" type="number" value="380" min="360" max="1099"> <input id="fit-end" type="number" value="780" min="361" max="1100">
+        </span>
+      </label>
+      <label>Fit with
+        <select id="method">
+          <option value="local">Local optimizer</option>
+          <option value="firmware">RS-7 firmware</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="correct" checked> correct chromaticity after fit</label>
+      <button type="submit" id="match-button" class="primary">Match</button>
+    </form>
+    <p id="match-result" class="result"></p>
+  </section>
+
+  <section class="card" id="presets-card">
+    <h2>Presets</h2>
+    <select id="presets" size="6" aria-label="Presets"></select>
+    <div class="row">
+      <button id="recall">Recall</button>
+      <button id="delete" class="danger">Delete</button>
+    </div>
+    <form id="store-form" class="row">
+      <input id="store-number" type="number" min="0" max="99" value="1" title="Preset number (0-99)">
+      <input id="store-name" type="text" placeholder="name" maxlength="40">
+      <button type="submit">Store</button>
+    </form>
+  </section>
+</main>
+
+<footer id="status" role="status">Connecting...</footer>
+<script src="app.js"></script>
+</body>
+</html>
