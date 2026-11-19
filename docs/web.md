@@ -14,7 +14,7 @@ PySide6 or a display, so it suits a headless Raspberry Pi next to the unit.
 
 The web interface is the `web` extra (FastAPI and uvicorn):
 
-    uv tool install "gammascientific-rs7[web] @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"
+    uv tool install "gammascientific-rs7[web] @ git+https://github.com/phili-b/gammascientific-rs7.git"
 
 **On the Raspberry Pi with the unit plugged in** (serial port `/dev/ttyUSB0`):
 

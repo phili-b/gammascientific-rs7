@@ -18,7 +18,7 @@ The unit talks at **460800 baud, 8N1** (it can be configured for 115200 instead;
 
 Python 3.11 or newer is needed. The project uses [uv](https://docs.astral.sh/uv/). As a tool, with the `rs7` command and the GUI:
 
-    uv tool install "gammascientific-rs7[gui] @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"
+    uv tool install "gammascientific-rs7[gui] @ git+https://github.com/phili-b/gammascientific-rs7.git"
 
 Leave out `[gui]` for the command and the Python API only (no PySide6), e.g. on a headless Raspberry Pi.
 
@@ -26,7 +26,7 @@ Use `[web]` for the [web interface](web.md) (`rs7 web`), which needs FastAPI ins
 
 As a library in your own project:
 
-    uv add "gammascientific-rs7 @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"
+    uv add "gammascientific-rs7 @ git+https://github.com/phili-b/gammascientific-rs7.git"
 
 To work on the package itself, see the Development section of the README.
 

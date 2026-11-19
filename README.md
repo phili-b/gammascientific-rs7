@@ -36,15 +36,15 @@ Or install from source:
 
 The project uses [uv](https://docs.astral.sh/uv/). CLI and GUI:
 
-    uv tool install "gammascientific-rs7[gui] @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"
+    uv tool install "gammascientific-rs7[gui] @ git+https://github.com/phili-b/gammascientific-rs7.git"
 
 CLI and Python API only (e.g. a headless Raspberry Pi), without PySide6:
 
-    uv tool install "gammascientific-rs7 @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"
+    uv tool install "gammascientific-rs7 @ git+https://github.com/phili-b/gammascientific-rs7.git"
 
 As a library in your own project:
 
-    uv add "gammascientific-rs7 @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"
+    uv add "gammascientific-rs7 @ git+https://github.com/phili-b/gammascientific-rs7.git"
 
 On Linux, add your user to the `dialout` group once (`sudo usermod -aG dialout $USER`, then log in again) to be allowed to use `/dev/ttyUSB0`.
 
@@ -137,7 +137,7 @@ or `rs7 gui` or `python -m rs7.gui`. Pick a port under **Settings > Select COM P
     rs7 web                                          # unit on this machine (first RS-7 found), http://<this machine>:8000
     rs7 web --device socket://10.61.100.206:5000     # unit shared by `rs7 bridge` on another machine
 
-Needs the `web` extra (`uv tool install "gammascientific-rs7[web] @ git+https://gittf.ams-osram.info/cis_solutions/hardware/gammascientific-rs7.git"`). Channel sliders, spectrum, presets, target match and color quality in a browser, also on a phone. There is no login: use it on a trusted network only. See [docs/web.md](docs/web.md).
+Needs the `web` extra (`uv tool install "gammascientific-rs7[web] @ git+https://github.com/phili-b/gammascientific-rs7.git"`). Channel sliders, spectrum, presets, target match and color quality in a browser, also on a phone. There is no login: use it on a trusted network only. See [docs/web.md](docs/web.md).
 
 ## Documentation
 
