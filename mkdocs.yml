@@ -1,4 +1,6 @@
 site_name: gammascientific-rs7
+site_url: https://phili-b.github.io/gammascientific-rs7/
+repo_url: https://github.com/phili-b/gammascientific-rs7
 nav:
   - Getting started: index.md
   - Command line: cli.md
