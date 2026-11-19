@@ -33,6 +33,28 @@ cannot use the same bridge at the same time. The same holds for a serial port: o
 Options: `--host` (default `0.0.0.0`), `--port` (default 8000), `--device`. Stop with Ctrl+C. The connection is
 opened when the server starts; if the unit is switched off or unplugged, restart `rs7 web`.
 
+### Start at boot (Raspberry Pi)
+
+To have the page always available, run it as a systemd service. Save as `/etc/systemd/system/rs7-web.service`,
+adjusting `User` and the path of `rs7` (`which rs7`):
+
+    [Unit]
+    Description=RS-7 web interface
+    After=network.target
+
+    [Service]
+    User=pi
+    ExecStart=/home/pi/.local/bin/rs7 web --device /dev/ttyUSB0
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+
+Then enable it with `sudo systemctl enable --now rs7-web`, and follow the log with `journalctl -u rs7-web -f`. The
+user must be allowed to use the serial port (group `dialout`). `Restart=on-failure` also brings the page back
+after the unit was unplugged and plugged in again.
+
 ## The page
 
 | Area | What it does |
@@ -65,5 +87,30 @@ The page uses a small JSON API under `/api`, which you can also call from script
 | `POST /api/match` `{target, level, units, at_max, start, end, method, correct_chromaticity}` | Fit to a target; returns the output and target color reports and the comparison |
 | `GET /api/alarm`, `POST /api/alarm` | Read the alarm, clear it |
 
-Errors from the unit are returned as HTTP 400 with `{"detail": "<message>"}`; the page shows the message. All
-calls to the unit are made one at a time, so a long match delays other requests until it is done.
+Errors are returned as `{"detail": "<message>"}`, and the page shows the message:
+
+| Status | Meaning |
+|---|---|
+| 400 | The unit refused the command, or a value is wrong (for example a target file, or a wavelength range outside 360-1100 nm) |
+| 422 | The request body or a parameter has the wrong type or is out of range (for example a preset number above 99) |
+| 503 | The connection to the unit failed (unplugged, bridge gone) |
+| 504 | The unit did not answer in time |
+
+All calls to the unit are made one at a time, so a long match delays other requests until it is done.
+
+Examples with `curl`:
+
+    curl http://10.61.100.206:8000/api/state
+    curl -X POST http://10.61.100.206:8000/api/output -H 'Content-Type: application/json' -d '{"level": 50}'
+    curl -X POST http://10.61.100.206:8000/api/match -H 'Content-Type: application/json'          -d '{"target": "D65", "level": 500, "units": "photometric"}'
+
+## Troubleshooting
+
+| Symptom | Cause and remedy |
+|---|---|
+| `rs7 web` stops at start with a port or device error | No RS-7 found, or another program (`rs7-gui`, a bridge client, a second `rs7 web`) has the serial port or bridge. Close it, or pass `--device`. |
+| `The web interface needs FastAPI` | Install the `web` extra, see [Install and start](#install-and-start). |
+| `Address already in use` | Another program uses port 8000; choose another with `--port`. |
+| Page does not load from another computer | The server was started with `--host 127.0.0.1`, or a firewall blocks the port. |
+| Status line turns red with "Connection to the RS-7 failed" | The unit was switched off or unplugged. Restart `rs7 web` (or let systemd do it). |
+| A match seems to hang | The first local-optimizer run measures every channel, about 25 s; the page waits for it. |
